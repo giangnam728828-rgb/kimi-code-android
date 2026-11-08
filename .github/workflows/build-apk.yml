@@ -64,8 +64,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
         with:
-          tag_name: v1.0.0
-          name: "Kimi Code on Android v1.0.0"
+          tag_name: v1.1.0
+          name: "Kimi Code on Android v1.1.0 (DSHA 启动器对齐版)"
           draft: false
           prerelease: false
           body: |
