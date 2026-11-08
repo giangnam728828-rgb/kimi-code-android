@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Kimi Code</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- 头部顶栏（在全屏模式下可收起） -->
+    <header id="header">
+      <div class="brand">
+        <div class="logo-badge">K</div>
+        <div class="brand-info">
+          <h1>Kimi Code</h1>
+          <span class="sub">Android 启动器</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div id="status-pill" class="status-pill checking">
+          <span class="dot"></span>
+          <span id="status-text">检测中...</span>
+        </div>
+        <button id="toggle-menu" class="icon-btn" title="设置">⚙️</button>
+      </div>
+    </header>
+
+    <!-- 主界面：加载 iframe 或 离线启动面板 -->
+    <main id="main-content">
+      <!-- 离线/等待服务面板 -->
+      <div id="offline-panel" class="panel">
+        <div class="card hero-card">
+          <div class="hero-icon">🤖</div>
+          <h2>连接你的专属 Kimi Code</h2>
+          <p class="desc">在手机端以原生权限运行，支持读写代码、命令执行与自动化工作流。</p>
+          
+          <div class="connection-box">
+            <label for="server-input">服务器地址：</label>
+            <div class="input-group">
+              <input type="text" id="server-input" value="http://127.0.0.1:58630/" placeholder="http://127.0.0.1:58630/" />
+              <button id="btn-connect" class="primary-btn">连接</button>
+            </div>
+            <div class="quick-links">
+              <span>快速选择：</span>
+              <button class="chip" data-port="58630">端口 58630 (推荐)</button>
+              <button class="chip" data-port="58627">端口 58627</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card tip-card">
+          <h3>📋 本地后台启动命令</h3>
+          <p>若服务尚未启动，请在手机终端（Termux / PRoot / DSHA）中运行：</p>
+          <div class="code-box">
+            <code>/workspace/kimicode/start-web.sh</code>
+            <button id="btn-copy-cmd" class="copy-btn">复制</button>
+          </div>
+        </div>
+
+        <div class="card perms-card">
+          <h3>🛡️ 手机原生系统特权</h3>
+          <ul class="perms-list">
+            <li>✅ <strong>前台保活服务</strong>：防止切后台被系统杀进程</li>
+            <li>✅ <strong>全文件读写</strong>：可直接管理手机内部项目代码</li>
+            <li>✅ <strong>网络完全放行</strong>：支持本地回环通信与外部 API 调度</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Kimi Code 嵌入容器 -->
+      <div id="webview-container" class="webview-container hidden">
+        <iframe id="agent-frame" src="about:blank" allow="clipboard-read; clipboard-write; microphone; camera"></iframe>
+      </div>
+    </main>
+
+    <!-- 悬浮控制浮标（全屏时可用） -->
+    <div id="fab-menu" class="fab-menu hidden">
+      <button id="fab-toggle" class="fab-btn">⚙️</button>
+      <div id="fab-options" class="fab-options hidden">
+        <button id="fab-reload" class="fab-item">🔄 重新加载</button>
+        <button id="fab-settings" class="fab-item">🔌 连接设置</button>
+        <button id="fab-fullscreen" class="fab-item">🔲 切换全屏</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

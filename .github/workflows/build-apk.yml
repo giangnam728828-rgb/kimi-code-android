@@ -1,0 +1,86 @@
+name: Build Kimi Code Android APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install Project Dependencies
+        run: |
+          npm install
+
+      - name: Initialize & Sync Capacitor Android
+        run: |
+          npx cap add android || true
+          npx cap sync android
+
+      - name: Inject Android System Permissions
+        run: |
+          node scripts/inject-permissions.mjs
+
+      - name: Build Debug APK with Gradle
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Rename APK for Distribution
+        run: |
+          mkdir -p output
+          cp android/app/build/outputs/apk/debug/app-debug.apk output/Kimi-Code-Android.apk
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kimi-Code-Android-APK
+          path: output/Kimi-Code-Android.apk
+          if-no-files-found: error
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.0.0
+          name: "Kimi Code on Android v1.0.0"
+          draft: false
+          prerelease: false
+          body: |
+            ## 📱 Kimi Code on Android 移动端原生启动器
+
+            本安装包通过 GitHub Actions 自动化编译构建完成：
+            - **免 Root 运行**：安装即可与手机本地或局域网内的 Kimi Code Agent 无缝联动；
+            - **原生特权**：申请了前台保活服务、手机外部文件读写与网络完全放行；
+            - **全屏沉浸体验**：无地址栏、支持手机触控手势与快捷连接面板。
+
+            ### 🚀 安装使用方法：
+            1. 下载下方的 `Kimi-Code-Android.apk` 并安装到手机；
+            2. 在终端启动 Kimi 服务（`/workspace/kimicode/start-web.sh`）；
+            3. 打开此 App 即可自动连接使用！
+          files: |
+            output/Kimi-Code-Android.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
