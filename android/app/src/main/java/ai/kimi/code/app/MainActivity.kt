@@ -67,6 +67,8 @@ class MainActivity : Activity() {
     private lateinit var pagePlugins: View
     private lateinit var pageSettings: View
     private lateinit var pageTerminal: View
+    private lateinit var pageData: View
+    private lateinit var shell: View
     private lateinit var pluginList: LinearLayout
     private lateinit var termOutput: TextView
     private lateinit var termScroll: ScrollView
@@ -84,6 +86,10 @@ class MainActivity : Activity() {
 
     private val listener: () -> Unit = { runOnUiThread { render() } }
 
+    private companion object {
+        const val REQUEST_PICK_BACKUP = 3001
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -93,6 +99,7 @@ class MainActivity : Activity() {
         setupSettingsPage()
         setupTerminal()
         setupPlugins()
+        setupDataPage()
         requestStoragePermission()
 
         Runtime.addListener(listener)
@@ -125,6 +132,8 @@ class MainActivity : Activity() {
         pagePlugins = findViewById(R.id.pagePlugins)
         pageSettings = findViewById(R.id.pageSettings)
         pageTerminal = findViewById(R.id.pageTerminal)
+        pageData = findViewById(R.id.pageData)
+        shell = findViewById(R.id.shell)
         pluginList = findViewById(R.id.pluginList)
         termOutput = findViewById(R.id.termOutput)
         termScroll = findViewById(R.id.termScroll)
@@ -163,6 +172,8 @@ class MainActivity : Activity() {
                 (findViewById<TextView>(R.id.iconPlugins) to findViewById<TextView>(R.id.labelPlugins)),
             findViewById<View>(R.id.navSettings) to
                 (findViewById<TextView>(R.id.iconSettings) to findViewById<TextView>(R.id.labelSettings)),
+            findViewById<View>(R.id.navData) to
+                (findViewById<TextView>(R.id.iconData) to findViewById<TextView>(R.id.labelData)),
             findViewById<View>(R.id.navTerminal) to
                 (findViewById<TextView>(R.id.iconTerminal) to findViewById<TextView>(R.id.labelTerminal)),
         )
@@ -170,6 +181,7 @@ class MainActivity : Activity() {
             R.id.navHome to R.id.pageHome,
             R.id.navPlugins to R.id.pagePlugins,
             R.id.navSettings to R.id.pageSettings,
+            R.id.navData to R.id.pageData,
             R.id.navTerminal to R.id.pageTerminal,
         )
         targets.forEach { (navId, pageId) ->
@@ -183,9 +195,16 @@ class MainActivity : Activity() {
         pagePlugins.visibility = if (pageId == R.id.pagePlugins) View.VISIBLE else View.GONE
         pageSettings.visibility = if (pageId == R.id.pageSettings) View.VISIBLE else View.GONE
         pageTerminal.visibility = if (pageId == R.id.pageTerminal) View.VISIBLE else View.GONE
+        pageData.visibility = if (pageId == R.id.pageData) View.VISIBLE else View.GONE
         hideWorkspace()
 
-        val pages = listOf(R.id.pageHome, R.id.pagePlugins, R.id.pageSettings, R.id.pageTerminal)
+        val pages = listOf(
+            R.id.pageHome,
+            R.id.pagePlugins,
+            R.id.pageSettings,
+            R.id.pageData,
+            R.id.pageTerminal,
+        )
         navItems.forEachIndexed { index, (container, texts) ->
             val active = pages[index] == pageId
             val color = if (active) getColor(R.color.accent) else getColor(R.color.text_muted)
@@ -198,12 +217,14 @@ class MainActivity : Activity() {
             when (pageId) {
                 R.id.pagePlugins -> R.string.nav_plugins
                 R.id.pageSettings -> R.string.nav_settings
+                R.id.pageData -> R.string.nav_data
                 R.id.pageTerminal -> R.string.nav_terminal
                 else -> R.string.app_name
             }
         )
         if (pageId == R.id.pageSettings) loadSettingsIntoUi()
         if (pageId == R.id.pagePlugins) renderPlugins()
+        if (pageId == R.id.pageData) renderDataPage()
     }
 
     // ---------------------------------------------------------------- home page
@@ -263,15 +284,18 @@ class MainActivity : Activity() {
             return
         }
         val file = File(Paths.logsDir(this).apply { mkdirs() }, "kimi-log.txt")
-        runCatching { file.writeText(body) }
-            .onSuccess {
-                val intent = Intent(Intent.ACTION_SEND)
-                    .setType("text/plain")
-                    .putExtra(Intent.EXTRA_STREAM, android.net.Uri.fromFile(file))
-                runCatching { startActivity(Intent.createChooser(intent, "保存日志")) }
-                toast("已保存到 ${file.absolutePath}")
-            }
-            .onFailure { toast("保存失败：${it.message}") }
+        val shared = File(File(filesDir, "shared").apply { mkdirs() }, "kimi-log.txt")
+        runCatching {
+            file.writeText(body)
+            shared.writeText(body)
+        }.onSuccess {
+            val intent = Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_STREAM, LocalFileProvider.uriFor(this, shared))
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            runCatching { startActivity(Intent.createChooser(intent, "保存日志")) }
+            toast("日志已导出")
+        }.onFailure { toast("保存失败：${it.message}") }
     }
 
     // ---------------------------------------------------------------- workspace
@@ -332,24 +356,23 @@ class MainActivity : Activity() {
             webLoading.visibility = View.VISIBLE
             webView.loadUrl(Runtime.workspaceUrl)
         }
+        shell.visibility = View.GONE
         webContainer.visibility = View.VISIBLE
-        hidePages()
     }
 
+    /**
+     * Brings the launcher back. The shell was hidden entirely while the
+     * workspace was open, so restoring it restores the tab the user left from.
+     */
     private fun hideWorkspace() {
         workspaceVisible = false
         webContainer.visibility = View.GONE
+        shell.visibility = View.VISIBLE
         pageHome.visibility = if (currentPage == R.id.pageHome) View.VISIBLE else View.GONE
         pagePlugins.visibility = if (currentPage == R.id.pagePlugins) View.VISIBLE else View.GONE
         pageSettings.visibility = if (currentPage == R.id.pageSettings) View.VISIBLE else View.GONE
+        pageData.visibility = if (currentPage == R.id.pageData) View.VISIBLE else View.GONE
         pageTerminal.visibility = if (currentPage == R.id.pageTerminal) View.VISIBLE else View.GONE
-    }
-
-    private fun hidePages() {
-        pageHome.visibility = View.GONE
-        pagePlugins.visibility = View.GONE
-        pageSettings.visibility = View.GONE
-        pageTerminal.visibility = View.GONE
     }
 
     // ---------------------------------------------------------------- settings
@@ -519,6 +542,215 @@ class MainActivity : Activity() {
         }.getOrDefault(emptyList())
     }
 
+    // ---------------------------------------------------------------- data
+
+    private lateinit var backupStatus: TextView
+    private lateinit var backupProgress: ProgressBar
+    private lateinit var btnExportBackup: Button
+    private lateinit var btnImportBackup: Button
+    private lateinit var valueBackupLocation: TextView
+    private lateinit var valueDataSize: TextView
+    private var backupBusy = false
+
+    private fun setupDataPage() {
+        backupStatus = findViewById(R.id.backupStatus)
+        backupProgress = findViewById(R.id.backupProgress)
+        btnExportBackup = findViewById(R.id.btnExportBackup)
+        btnImportBackup = findViewById(R.id.btnImportBackup)
+        valueBackupLocation = findViewById(R.id.valueBackupLocation)
+        valueDataSize = findViewById(R.id.valueDataSize)
+
+        btnExportBackup.setOnClickListener { confirmBackup() }
+        btnImportBackup.setOnClickListener { pickBackupFile() }
+        findViewById<View>(R.id.rowBackupLocation).setOnClickListener { openBackupFolder() }
+    }
+
+    private fun renderDataPage() {
+        val dir = BackupManager.backupDir(this)
+        val public = dir.absolutePath.contains("/storage/emulated/0/")
+        valueBackupLocation.text = if (public) {
+            dir.absolutePath.replace("/storage/emulated/0/", "内部存储/")
+        } else {
+            getString(R.string.value_backup_location)
+        }
+
+        val latest = BackupManager.latestBackup(this)
+        backupStatus.text = if (latest == null) {
+            getString(R.string.backup_none)
+        } else {
+            getString(
+                R.string.backup_done,
+                latest.name,
+                BackupManager.formatSize(latest.length()),
+            )
+        }
+
+        Thread {
+            val size = BackupManager.dataSize(this)
+            runOnUiThread { valueDataSize.text = BackupManager.formatSize(size) }
+        }.apply { isDaemon = true }.start()
+
+        val busy = backupBusy
+        btnExportBackup.isEnabled = !busy
+        btnImportBackup.isEnabled = !busy
+        backupProgress.visibility = if (busy) View.VISIBLE else View.GONE
+        if (!busy) backupProgress.isIndeterminate = false
+    }
+
+    private fun setBackupBusy(busy: Boolean, message: String? = null) {
+        backupBusy = busy
+        btnExportBackup.isEnabled = !busy
+        btnImportBackup.isEnabled = !busy
+        backupProgress.visibility = if (busy) View.VISIBLE else View.GONE
+        if (busy) backupProgress.isIndeterminate = true
+        message?.let { backupStatus.text = it }
+    }
+
+    private fun confirmBackup() {
+        if (backupBusy) return
+        android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.backup_confirm_title)
+            .setMessage(R.string.backup_confirm_body)
+            .setPositiveButton(android.R.string.ok) { _, _ -> startBackup() }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun startBackup() {
+        setBackupBusy(true, getString(R.string.backup_running))
+
+        Thread {
+            val wasRunning = Runtime.phase == Runtime.Phase.READY
+            if (wasRunning) {
+                RuntimeService.stop(this)
+                val deadline = System.currentTimeMillis() + 8000
+                while (ProotRuntime.isRunning() && System.currentTimeMillis() < deadline) {
+                    runCatching { Thread.sleep(200) }
+                }
+            }
+
+            val result = runCatching {
+                BackupManager.createBackup(this, object : BackupManager.Progress {
+                    override fun onProgress(percent: Int) {
+                        runOnUiThread {
+                            backupProgress.isIndeterminate = false
+                            backupProgress.progress = percent.coerceAtLeast(0)
+                            backupStatus.text =
+                                getString(R.string.backup_running) + " " + percent + "%"
+                        }
+                    }
+
+                    override fun onMessage(message: String) {
+                        runOnUiThread { backupStatus.text = message }
+                    }
+                })
+            }
+
+            runOnUiThread {
+                setBackupBusy(false)
+                result.onSuccess { backup ->
+                    Runtime.log("备份完成：${backup.file.name}（${backup.items} 个文件）")
+                    backupStatus.text = getString(
+                        R.string.backup_done,
+                        backup.file.name,
+                        BackupManager.formatSize(backup.bytes),
+                    )
+                    shareBackup(backup.file)
+                }.onFailure { error ->
+                    Runtime.log("备份失败：${error.message}")
+                    backupStatus.text = getString(R.string.backup_failed, error.message ?: "未知错误")
+                }
+                if (wasRunning) RuntimeService.start(this)
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun shareBackup(file: File) {
+        Thread {
+            val share = runCatching { BackupManager.stageForSharing(this, file) }
+            runOnUiThread {
+                share.onSuccess { uri ->
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "application/zip"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    runCatching {
+                        startActivity(Intent.createChooser(intent, getString(R.string.backup_share_title)))
+                    }
+                }
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun pickBackupFile() {
+        if (backupBusy) return
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        runCatching { startActivityForResult(intent, REQUEST_PICK_BACKUP) }
+            .onFailure { toast("没有可用的文件选择器") }
+    }
+
+    private fun confirmRestore(uri: android.net.Uri) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.restore_confirm_title)
+            .setMessage(R.string.restore_confirm_body)
+            .setPositiveButton(android.R.string.ok) { _, _ -> startRestore(uri) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun startRestore(uri: android.net.Uri) {
+        setBackupBusy(true, getString(R.string.restore_running))
+
+        Thread {
+            val wasRunning = Runtime.phase == Runtime.Phase.READY
+            if (wasRunning) {
+                RuntimeService.stop(this)
+                val deadline = System.currentTimeMillis() + 8000
+                while (ProotRuntime.isRunning() && System.currentTimeMillis() < deadline) {
+                    runCatching { Thread.sleep(200) }
+                }
+            }
+
+            val result = runCatching {
+                BackupManager.restoreBackup(this, uri, object : BackupManager.Progress {
+                    override fun onProgress(percent: Int) = Unit
+
+                    override fun onMessage(message: String) {
+                        runOnUiThread { backupStatus.text = message }
+                    }
+                })
+            }
+
+            runOnUiThread {
+                setBackupBusy(false)
+                result.onSuccess { count ->
+                    Runtime.log("备份已恢复：$count 个文件")
+                    backupStatus.text = getString(R.string.restore_done, count)
+                    loadedUrl = null
+                    loadSettingsIntoUi()
+                    render()
+                }.onFailure { error ->
+                    Runtime.log("恢复失败：${error.message}")
+                    backupStatus.text = getString(R.string.restore_failed, error.message ?: "未知错误")
+                }
+                RuntimeService.start(this)
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun openBackupFolder() {
+        val dir = BackupManager.backupDir(this)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(android.net.Uri.parse("content://com.android.externalstorage.documents/root/primary"), "*/*")
+        }
+        runCatching { startActivity(intent) }
+            .onFailure { toast("备份目录：${dir.absolutePath}") }
+    }
+
     // ---------------------------------------------------------------- terminal
 
     private fun setupTerminal() {
@@ -627,6 +859,14 @@ class MainActivity : Activity() {
     }
 
     // ---------------------------------------------------------------- lifecycle
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_PICK_BACKUP || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        confirmRestore(uri)
+    }
 
     override fun onResume() {
         super.onResume()

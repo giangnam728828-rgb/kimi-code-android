@@ -37,6 +37,12 @@
         <service
             android:name=".RuntimeService"
             android:exported="false" />
+
+        <provider
+            android:name=".LocalFileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 
 </manifest>

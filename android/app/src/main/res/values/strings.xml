@@ -78,4 +78,31 @@
     <string name="term_welcome">在本地 Linux 环境里执行命令（工作目录 /root/workspace）。\n</string>
     <string name="term_hint">输入命令，例如 ls -la</string>
     <string name="term_send">执行</string>
+
+    <string name="nav_data">数据</string>
+    <string name="icon_data">⛁</string>
+    <string name="section_backup">备份与迁移</string>
+    <string name="section_storage">存储</string>
+    <string name="backup_intro">把容器里的会话、配置、插件和工作区打成一个 zip。换手机或重装时导入它，就能原样恢复。</string>
+    <string name="action_export_backup">导出备份</string>
+    <string name="action_import_backup">从备份文件恢复</string>
+    <string name="backup_none">还没有备份</string>
+    <string name="backup_running">正在打包…</string>
+    <string name="backup_done">备份已生成：%1$s（%2$s）</string>
+    <string name="backup_failed">备份失败：%1$s</string>
+    <string name="restore_running">正在恢复…</string>
+    <string name="restore_done">恢复完成，共写入 %1$d 个文件</string>
+    <string name="restore_failed">恢复失败：%1$s</string>
+    <string name="row_backup_location">备份位置</string>
+    <string name="value_backup_location">内部存储（卸载会清除）</string>
+    <string name="action_open_folder">打开</string>
+    <string name="row_data_size">数据占用</string>
+    <string name="value_calculating">计算中…</string>
+    <string name="backup_note">升级安装不会清除数据，只有卸载才会。Android 不允许卸载时保留数据，所以重要内容请定期导出到手机存储或分享出去。</string>
+    <string name="backup_confirm_title">导出备份</string>
+    <string name="backup_confirm_body">导出前会先停止本地服务，完成后自动重新启动，保证会话文件是一致的。</string>
+    <string name="restore_confirm_title">恢复备份</string>
+    <string name="restore_confirm_body">恢复会覆盖容器里同名的文件（会话、配置、插件、工作区）。确定继续吗？</string>
+    <string name="backup_share_title">分享备份文件</string>
+    <string name="backup_pick_title">选择备份文件</string>
 </resources>

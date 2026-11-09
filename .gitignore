@@ -8,3 +8,4 @@ android/local.properties
 *.iml
 .DS_Store
 android/app/src/main/assets/rootfs-arm64.tar.gz
+.signing/
