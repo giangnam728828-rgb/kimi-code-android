@@ -42,8 +42,8 @@
               <span class="indicator-dot"></span>
             </div>
             <div class="status-text-group">
-              <h2 id="main-status-title">Kimi Code 已就绪，可进入</h2>
-              <p id="main-status-desc" class="status-sub">proot · kimi-code 2.5.2</p>
+              <h2 id="main-status-title">正在等待本地服务…</h2>
+              <p id="main-status-desc" class="status-sub">服务启动后会自动连上，无需手动操作</p>
             </div>
           </div>
 
@@ -60,6 +60,16 @@
               </button>
             </div>
           </div>
+        </div>
+
+        <!-- 服务未就绪时的引导面板 -->
+        <div id="offline-help" class="card help-card hidden">
+          <div class="help-title">服务还没起来？</div>
+          <ol class="help-steps">
+            <li>打开 <b>PocketDev</b> 终端（服务会在终端启动时自动拉起，通常无需输入命令）。</li>
+            <li>如果还没起来，在终端执行一次：<code>bash /workspace/kimicode/kimi-serve.sh start</code></li>
+            <li>本页每 2.5 秒自动重试，服务就绪后会立刻变成可进入。</li>
+          </ol>
         </div>
 
         <!-- 双列数据指标卡 (端口 & 运行环境) -->
@@ -98,14 +108,8 @@
           </div>
         </div>
         <div class="card terminal-box" id="terminal-container">
-          <pre id="terminal-output"><code>[init] Kimi Code mobile launcher v2.5.2 booting...
-[core] PRoot Linux arm64 runtime ready
-[service] Checking local port 58630...
-[server] Kimi Code server online at 127.0.0.1:58630
-[auth] Token verification bypassed (--dangerous-bypass-auth)
-
-本机 Web 地址 (可长按复制) :
-http://127.0.0.1:58630/
+          <pre id="terminal-output"><code>[init] Kimi Code 手机启动器 v1.2.0
+[probe] 探测 http://127.0.0.1:58630/ …
 </code></pre>
         </div>
       </div>
@@ -150,6 +154,10 @@ http://127.0.0.1:58630/
             <input type="text" id="input-custom-url" value="http://127.0.0.1:58630/" />
             <button id="btn-apply-custom" class="btn-mini-primary">保存并连接</button>
           </div>
+        </div>
+        <div class="toggle-row">
+          <span>打开 App 后自动进入工作台</span>
+          <input type="checkbox" id="toggle-auto-enter" checked />
         </div>
       </div>
     </div>

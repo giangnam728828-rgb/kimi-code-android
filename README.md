@@ -1,33 +1,70 @@
-# Kimi Code on Android (移动端原生启动器)
+# Kimi Code on Android (移动端启动器)
 
-本项目是专为 Android 移动设备打造的 **Kimi Code 原生启动器**，支持在手机端直接与本地或局域网内的 Kimi Code 编码智能体进行交互。
-
----
-
-## 🌟 核心特性
-
-- **📱 原生 APK 体验**：摆脱浏览器地址栏与控制条束缚，全屏沉浸式写代码与对话。
-- **🛡️ 强大系统级权限**：
-  - 前台常驻保活（Foreground Service），防止切应用时后台被系统清理；
-  - 外部存储空间（`/sdcard`）读写能力，直接管理与编辑手机上的项目工程；
-  - 本地回环与局域网网络权限全开，毫秒级连接 Agent。
-- **⚡ 自动化 CI/CD**：内置 GitHub Actions 工作流，只要提交代码即可自动编译生成最新的 `.apk` 安装包。
-- **🔌 智能多端口探测**：启动时自动检测 `58630` 与 `58627` 端口，在线即秒连，离线提供一键切换与配置面板。
+把属于你自己的 **Kimi Code** 编码智能体装进手机：桌面图标一点，直接进入工作台。
 
 ---
 
-## 🚀 手机端运行步骤
+## 🌟 现在能做什么
 
-1. 在手机本地终端（如 Termux / PRoot）启动 Kimi Code 服务：
-   ```bash
-   /workspace/kimicode/start-web.sh
-   ```
-2. 打开手机上安装的 **Kimi Code** App，它将自动连接并展示工作台。
+- **📱 原生全屏体验**：独立 APK，无浏览器地址栏，支持手机触控与返回手势。
+- **🔗 自动连接**：启动即探测 `58630` / `58627`，服务在线就绪后可直接进入。
+- **♻️ 断线自愈**：服务未就绪时每 2.5 秒自动重试，服务一起来立刻连上，不用手动刷新。
+- **⚡ 打开即进入**：设置里可开启「自动进入工作台」，跳过启动面板。
+- **🛡️ 网络与存储权限**：本地回环、局域网、外部存储读写均已申请。
+- **🤖 自动化构建**：推送到 `main` 即由 GitHub Actions 编译并发布最新 APK。
 
 ---
 
-## 🛠️ GitHub Actions 自动编译说明
+## 🚀 手机端使用步骤
 
-本项目配置了完整的 GitHub Actions 工作流：
-- 每次向 `main` 分支推送代码，GitHub 会自动启动 Ubuntu 虚拟环境，完成 Gradle 编译；
-- 构建完成后，会自动在 [Releases](https://github.com/giangnam728828-rgb/kimi-code-android/releases) 发布最新的 `Kimi-Code-Android.apk`，手机直接点击即可下载安装。
+1. **安装 APK**：在 [Releases](https://github.com/giangnam728828-rgb/kimi-code-android/releases) 下载 `Kimi-Code-Android.apk` 并安装。
+2. **服务会自动启动**：PocketDev 终端打开时会自动执行启动钩子，把服务拉起来（无需敲命令）。
+3. **打开 App**：状态变为「已就绪」后点击进入工作台即可。
+
+如果服务确实没有起来，在终端执行一次：
+
+```bash
+bash /workspace/kimicode/kimi-serve.sh start
+```
+
+常用命令：
+
+```bash
+bash /workspace/kimicode/kimi-serve.sh status    # 查看状态
+bash /workspace/kimicode/kimi-serve.sh restart   # 重启
+bash /workspace/kimicode/kimi-serve.sh logs      # 实时日志
+```
+
+---
+
+## 🔧 工作原理
+
+```
+手机桌面图标
+     │
+     ▼
+Kimi Code APK (WebView 启动器)
+     │  探测 http://127.0.0.1:58630/
+     ▼
+本地容器中的 kimi web 服务  ←── kimi-serve.sh 守护（自动拉起 / 崩溃重启）
+     │
+     ▼
+Kimi Code Web 工作台（免 Token，直接用你自己的 API Key）
+```
+
+启动器本身不包含 Linux 运行时，它连接的是运行在本地容器里的 Kimi Code 服务。
+服务由 `kimi-serve.sh` 守护：终端启动时自动拉起，进程崩溃 3 秒后自动重启。
+
+---
+
+## 🛠️ 本地开发
+
+```bash
+npm install
+npx cap add android
+npx cap sync android
+node scripts/inject-permissions.mjs
+cd android && ./gradlew assembleDebug
+```
+
+产物：`android/app/build/outputs/apk/debug/app-debug.apk`

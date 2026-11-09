@@ -1,163 +1,230 @@
 (function () {
-  const DEFAULT_PORT = '58630';
-  const DEFAULT_URL = `http://127.0.0.1:${DEFAULT_PORT}/`;
+  const PORTS = ['58630', '58627'];
+  const DEFAULT_URL = `http://127.0.0.1:${PORTS[0]}/`;
   const STORAGE_URL_KEY = 'kimi_android_server_url';
   const STORAGE_THEME_KEY = 'kimi_android_theme';
+  const STORAGE_AUTO_ENTER_KEY = 'kimi_android_auto_enter';
+  const RETRY_MS = 2500;
 
-  // DOM 元素
-  const statusIndicator = document.getElementById('status-indicator');
-  const mainStatusTitle = document.getElementById('main-status-title');
-  const mainStatusDesc = document.getElementById('main-status-desc');
-  const btnEnter = document.getElementById('btn-enter-workspace');
-  const btnRestart = document.getElementById('btn-restart');
-  const btnPower = document.getElementById('btn-power');
-  const powerText = document.getElementById('power-text');
-  const metricPort = document.getElementById('metric-port');
-  const metricEnv = document.getElementById('metric-env');
-  const terminalOutput = document.getElementById('terminal-output');
-  const workspaceView = document.getElementById('workspace-view');
-  const workspaceFrame = document.getElementById('workspace-frame');
-  const btnBack = document.getElementById('btn-back-to-launcher');
-  const btnViewAddresses = document.getElementById('btn-view-addresses');
-  const addressModal = document.getElementById('address-modal');
-  const btnCloseModal = document.getElementById('btn-close-modal');
-  const inputCustomUrl = document.getElementById('input-custom-url');
-  const btnApplyCustom = document.getElementById('btn-apply-custom');
-  const btnCopyLog = document.getElementById('btn-copy-log');
-  const btnDownloadLog = document.getElementById('btn-download-log');
-  const btnThemeToggle = document.getElementById('btn-theme-toggle');
+  const $ = (id) => document.getElementById(id);
+
+  const statusIndicator = $('status-indicator');
+  const mainStatusTitle = $('main-status-title');
+  const mainStatusDesc = $('main-status-desc');
+  const btnEnter = $('btn-enter-workspace');
+  const btnRestart = $('btn-restart');
+  const btnPower = $('btn-power');
+  const powerText = $('power-text');
+  const metricPort = $('metric-port');
+  const metricEnv = $('metric-env');
+  const terminalOutput = $('terminal-output');
+  const workspaceView = $('workspace-view');
+  const workspaceFrame = $('workspace-frame');
+  const btnBack = $('btn-back-to-launcher');
+  const btnViewAddresses = $('btn-view-addresses');
+  const addressModal = $('address-modal');
+  const btnCloseModal = $('btn-close-modal');
+  const inputCustomUrl = $('input-custom-url');
+  const btnApplyCustom = $('btn-apply-custom');
+  const btnCopyLog = $('btn-copy-log');
+  const btnDownloadLog = $('btn-download-log');
+  const btnThemeToggle = $('btn-theme-toggle');
+  const offlineHelp = $('offline-help');
+  const toggleAutoEnter = $('toggle-auto-enter');
 
   let currentUrl = localStorage.getItem(STORAGE_URL_KEY) || DEFAULT_URL;
   let isServiceOnline = false;
+  let retryTimer = null;
+  let probing = false;
+  let enteredThisLaunch = false;
 
-  // 日志记录函数
+  const autoEnter = localStorage.getItem(STORAGE_AUTO_ENTER_KEY) !== '0';
+
   function appendLog(line) {
     const time = new Date().toLocaleTimeString();
-    terminalOutput.querySelector('code').textContent += `\n[${time}] ${line}`;
+    const code = terminalOutput.querySelector('code');
+    code.textContent += `\n[${time}] ${line}`;
     terminalOutput.scrollTop = terminalOutput.scrollHeight;
   }
 
-  // 状态机更新
-  function setReadyState(online, port = '58630') {
+  function setReadyState(online, port) {
     isServiceOnline = online;
-    metricPort.textContent = port;
+    if (port) metricPort.textContent = port;
 
     if (online) {
       statusIndicator.className = 'status-indicator online';
       mainStatusTitle.textContent = 'Kimi Code 已就绪，可进入';
-      mainStatusDesc.textContent = 'proot · kimi-code 2.5.2';
+      mainStatusDesc.textContent = '本地服务 · kimi-code 2.5.2';
       metricEnv.textContent = 'READY';
       metricEnv.className = 'metric-val text-ready';
       btnEnter.innerHTML = '<span class="play-icon">▶</span> 进入工作台';
       btnEnter.style.background = '#2563eb';
       powerText.textContent = '停止';
+      offlineHelp.classList.add('hidden');
     } else {
       statusIndicator.className = 'status-indicator';
-      mainStatusTitle.textContent = 'Kimi Code 服务未就绪';
-      mainStatusDesc.textContent = '点击下方按钮可重试或手动启动';
+      mainStatusTitle.textContent = '正在等待本地服务…';
+      mainStatusDesc.textContent = '服务启动后会自动连上，无需手动操作';
       metricEnv.textContent = 'STANDBY';
       metricEnv.className = 'metric-val';
-      btnEnter.innerHTML = '<span class="play-icon">🚀</span> 启动并进入';
+      btnEnter.innerHTML = '<span class="play-icon">↻</span> 立即重试';
       btnEnter.style.background = '#0284c7';
-      powerText.textContent = '启动';
+      powerText.textContent = '重试';
+      offlineHelp.classList.remove('hidden');
     }
   }
 
-  // 探测后端服务状态
-  async function probeServer(url) {
+  // 端口可达性探测：no-cors 只关心「连接是否建立」
+  async function probe(url) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 2500);
-      const res = await fetch(url, { method: 'HEAD', mode: 'no-cors', signal: controller.signal });
-      clearTimeout(timeout);
+      await fetch(url, { method: 'HEAD', mode: 'no-cors', cache: 'no-store', signal: controller.signal });
       return true;
     } catch {
       return false;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
-  async function checkAllPorts() {
-    appendLog(`正在探测主端口 ${currentUrl}...`);
-    let ok = await probeServer(currentUrl);
-
-    if (ok) {
-      const port = new URL(currentUrl).port || '58630';
-      setReadyState(true, port);
-      appendLog(`连接就绪: ${currentUrl}`);
-      return;
-    }
-
-    // 备用端口探测
-    appendLog('主端口未响应，正在探测备用端口 58627...');
-    let altOk = await probeServer('http://127.0.0.1:58627/');
-    if (altOk) {
-      currentUrl = 'http://127.0.0.1:58627/';
-      setReadyState(true, '58627');
-      appendLog('在备用端口 58627 发现可用服务！');
-      return;
-    }
-
-    setReadyState(false, new URL(currentUrl).port || '58630');
-    appendLog('本地服务未启动，可直接点击【进入工作台】唤起。');
+  function scheduleRetry() {
+    if (retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!isServiceOnline) discover(true);
+    }, RETRY_MS);
   }
 
-  // 动作绑定
-  btnEnter.addEventListener('click', () => {
-    appendLog(`正在打开工作台: ${currentUrl}`);
+  async function discover(silent) {
+    if (probing) return;
+    probing = true;
+    try {
+      if (!silent) appendLog('正在探测本地服务…');
+
+      const candidates = [currentUrl];
+      for (const p of PORTS) {
+        const u = `http://127.0.0.1:${p}/`;
+        if (!candidates.includes(u)) candidates.push(u);
+      }
+
+      for (const url of candidates) {
+        if (await probe(url)) {
+          const port = (() => {
+            try {
+              return new URL(url).port || '58630';
+            } catch {
+              return '58630';
+            }
+          })();
+          const changed = url !== currentUrl;
+          currentUrl = url;
+          localStorage.setItem(STORAGE_URL_KEY, url);
+          setReadyState(true, port);
+          if (changed || !silent) appendLog(`已连接: ${url}`);
+          if (autoEnter && !enteredThisLaunch) {
+            enteredThisLaunch = true;
+            appendLog('自动进入工作台…');
+            openWorkspace();
+          }
+          return true;
+        }
+      }
+
+      setReadyState(false);
+      appendLog('未发现本地服务，2.5 秒后自动重试。');
+      scheduleRetry();
+      return false;
+    } finally {
+      probing = false;
+    }
+  }
+
+  function openWorkspace() {
     workspaceFrame.src = currentUrl;
     workspaceView.classList.remove('hidden');
+    try {
+      history.pushState({ ws: 1 }, '');
+    } catch {}
+  }
+
+  function closeWorkspace() {
+    workspaceView.classList.add('hidden');
+    workspaceFrame.src = 'about:blank';
+  }
+
+  btnEnter.addEventListener('click', () => {
+    if (isServiceOnline) {
+      appendLog(`打开工作台: ${currentUrl}`);
+      openWorkspace();
+    } else {
+      appendLog('手动重试…');
+      discover(false);
+    }
   });
 
   btnBack.addEventListener('click', () => {
-    workspaceView.classList.add('hidden');
+    if (workspaceView.classList.contains('hidden')) return;
+    closeWorkspace();
+    try {
+      history.back();
+    } catch {}
   });
 
-  btnRestart.addEventListener('click', async () => {
-    appendLog('正在重新连接并刷新环境状态...');
+  window.addEventListener('popstate', () => {
+    if (!workspaceView.classList.contains('hidden')) closeWorkspace();
+  });
+
+  btnRestart.addEventListener('click', () => {
+    appendLog('重新探测服务…');
     setReadyState(false);
-    await checkAllPorts();
+    discover(false);
   });
 
   btnPower.addEventListener('click', () => {
     if (isServiceOnline) {
       setReadyState(false);
-      appendLog('已切换至离线待机状态。');
+      appendLog('已进入待机，后台仍会继续探测。');
+      scheduleRetry();
     } else {
-      checkAllPorts();
+      discover(false);
     }
   });
 
-  // 快捷入口 & 弹窗
-  btnViewAddresses.addEventListener('click', () => {
-    addressModal.classList.remove('hidden');
-  });
-
-  btnCloseModal.addEventListener('click', () => {
-    addressModal.classList.add('hidden');
-  });
+  btnViewAddresses.addEventListener('click', () => addressModal.classList.remove('hidden'));
+  btnCloseModal.addEventListener('click', () => addressModal.classList.add('hidden'));
 
   document.querySelectorAll('.address-item').forEach((item) => {
     item.addEventListener('click', () => {
       const url = item.getAttribute('data-url');
       navigator.clipboard?.writeText(url);
-      item.querySelector('.copy-tag').textContent = '已复制!';
-      setTimeout(() => (item.querySelector('.copy-tag').textContent = '复制'), 1500);
+      const tag = item.querySelector('.copy-tag');
+      tag.textContent = '已复制!';
+      setTimeout(() => (tag.textContent = '复制'), 1500);
     });
   });
 
   btnApplyCustom.addEventListener('click', () => {
     let url = inputCustomUrl.value.trim();
+    if (!url) return;
+    if (!/^https?:\/\//.test(url)) url = `http://${url}`;
     if (!url.endsWith('/')) url += '/';
     currentUrl = url;
     localStorage.setItem(STORAGE_URL_KEY, url);
     addressModal.classList.add('hidden');
-    checkAllPorts();
+    appendLog(`已切换地址: ${url}`);
+    discover(false);
   });
 
-  // 日志复制与下载
+  if (toggleAutoEnter) {
+    toggleAutoEnter.checked = autoEnter;
+    toggleAutoEnter.addEventListener('change', () => {
+      localStorage.setItem(STORAGE_AUTO_ENTER_KEY, toggleAutoEnter.checked ? '1' : '0');
+    });
+  }
+
   btnCopyLog.addEventListener('click', () => {
-    const text = terminalOutput.textContent;
-    navigator.clipboard?.writeText(text);
+    navigator.clipboard?.writeText(terminalOutput.textContent);
     btnCopyLog.textContent = '已复制!';
     setTimeout(() => (btnCopyLog.textContent = '长按复制'), 1500);
   });
@@ -170,7 +237,6 @@
     a.click();
   });
 
-  // 暗黑/浅色模式切换
   const savedTheme = localStorage.getItem(STORAGE_THEME_KEY) || 'theme-light';
   document.body.className = savedTheme;
 
@@ -181,22 +247,27 @@
     localStorage.setItem(STORAGE_THEME_KEY, newTheme);
   });
 
-  // 底部导航栏切换
   document.querySelectorAll('.nav-tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.nav-tab').forEach((t) => t.classList.remove('active'));
       tab.classList.add('active');
       const target = tab.getAttribute('data-tab');
-      if (target === 'plugins') {
-        appendLog('提示：插件中心支持扩展各种工具和技能库。');
-      } else if (target === 'settings') {
+      if (target === 'settings') {
         addressModal.classList.remove('hidden');
       } else if (target === 'terminal') {
         terminalOutput.scrollIntoView({ behavior: 'smooth' });
+      } else if (target === 'plugins') {
+        appendLog('插件与技能库跟随你的本地 Kimi Code 服务，无需在此单独安装。');
       }
     });
   });
 
-  // 页面加载启动自检
-  checkAllPorts();
+  // 从工作台返回或 App 回到前台时，重新确认服务状态
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && workspaceView.classList.contains('hidden')) discover(true);
+  });
+
+  inputCustomUrl.value = currentUrl;
+  setReadyState(false);
+  discover(false);
 })();

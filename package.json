@@ -1,6 +1,6 @@
 {
   "name": "kimi-code-android",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Kimi Code on Android - Mobile Native Agent Launcher with System Capabilities",
   "main": "index.js",
   "scripts": {

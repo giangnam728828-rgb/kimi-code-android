@@ -64,22 +64,27 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
         with:
-          tag_name: v1.1.0
-          name: "Kimi Code on Android v1.1.0 (DSHA 启动器对齐版)"
+          tag_name: v1.2.0
+          name: "Kimi Code on Android v1.2.0 (自动连接版)"
           draft: false
           prerelease: false
           body: |
-            ## 📱 Kimi Code on Android 移动端原生启动器
+            ## 📱 Kimi Code on Android 移动端启动器 v1.2.0
 
-            本安装包通过 GitHub Actions 自动化编译构建完成：
-            - **免 Root 运行**：安装即可与手机本地或局域网内的 Kimi Code Agent 无缝联动；
-            - **原生特权**：申请了前台保活服务、手机外部文件读写与网络完全放行；
-            - **全屏沉浸体验**：无地址栏、支持手机触控手势与快捷连接面板。
+            本次更新的重点：**打开 App 就能用，不再需要手动敲命令启动服务。**
 
-            ### 🚀 安装使用方法：
-            1. 下载下方的 `Kimi-Code-Android.apk` 并安装到手机；
-            2. 在终端启动 Kimi 服务（`/workspace/kimicode/start-web.sh`）；
-            3. 打开此 App 即可自动连接使用！
+            - **自动连接**：App 启动即探测本地服务，就绪后可直接进入工作台；
+            - **断线自动重试**：服务未就绪时每 2.5 秒自动重试，服务一起来就自动连上；
+            - **可选"打开即进入"**：设置中可开启，跳过启动面板直达工作台；
+            - **真实状态显示**：不再显示虚假的启动日志，只反映实际探测结果；
+            - **全屏沉浸**：无地址栏，返回键可直接退回启动面板。
+
+            ### 🚀 使用方法
+            1. 下载下方的 `Kimi-Code-Android.apk` 安装；
+            2. 服务会在 PocketDev 终端打开时**自动拉起**（已配置启动钩子），无需手动执行；
+            3. 打开 App，等待状态变为"已就绪"，点击进入工作台即可。
+
+            > 若服务确实未启动，可在终端执行：`bash /workspace/kimicode/kimi-serve.sh start`
           files: |
             output/Kimi-Code-Android.apk
         env:
