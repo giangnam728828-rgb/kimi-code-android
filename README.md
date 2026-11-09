@@ -1,70 +1,111 @@
-# Kimi Code on Android (移动端启动器)
+# Kimi Code on Android
 
-把属于你自己的 **Kimi Code** 编码智能体装进手机：桌面图标一点，直接进入工作台。
-
----
-
-## 🌟 现在能做什么
-
-- **📱 原生全屏体验**：独立 APK，无浏览器地址栏，支持手机触控与返回手势。
-- **🔗 自动连接**：启动即探测 `58630` / `58627`，服务在线就绪后可直接进入。
-- **♻️ 断线自愈**：服务未就绪时每 2.5 秒自动重试，服务一起来立刻连上，不用手动刷新。
-- **⚡ 打开即进入**：设置里可开启「自动进入工作台」，跳过启动面板。
-- **🛡️ 网络与存储权限**：本地回环、局域网、外部存储读写均已申请。
-- **🤖 自动化构建**：推送到 `main` 即由 GitHub Actions 编译并发布最新 APK。
+把 **Kimi Code** 完整的编码智能体装进手机：不需要电脑、不需要终端里先开服务、不需要输入 Token。
+桌面图标一点，App 自己把 Linux 环境跑起来，直接进工作台。
 
 ---
 
-## 🚀 手机端使用步骤
+## 它到底是什么
 
-1. **安装 APK**：在 [Releases](https://github.com/giangnam728828-rgb/kimi-code-android/releases) 下载 `Kimi-Code-Android.apk` 并安装。
-2. **服务会自动启动**：PocketDev 终端打开时会自动执行启动钩子，把服务拉起来（无需敲命令）。
-3. **打开 App**：状态变为「已就绪」后点击进入工作台即可。
+这不是一个"网页壳"。APK 里带着 proot，首次启动会把一整套 Linux 运行环境下载并解压到 App 私有目录：
 
-如果服务确实没有起来，在终端执行一次：
+| 组件 | 说明 |
+| --- | --- |
+| **Ubuntu arm64 根文件系统** | 精简过的 Ubuntu 24.04 base |
+| **Node.js 24** | Kimi Code 服务端的运行时 |
+| **Kimi Code 服务端 + Web 工作台** | 本仓库 `dist` 构建产物 |
+| **proot** | 免 Root 运行 Linux 的核心（Termux 编译版） |
+| **ripgrep** | 内置，供智能体搜索代码用 |
 
-```bash
-bash /workspace/kimicode/kimi-serve.sh start
+装好之后，所有东西都在手机本地跑，和 DSHA 的思路一致：**App 就是运行环境**。
+
+---
+
+## 使用方法
+
+1. 在 [Releases](https://github.com/giangnam728828-rgb/kimi-code-android/releases) 下载 `Kimi-Code-Android.apk` 并安装；
+2. 打开 App，首次会下载约 **87 MB** 的运行环境（只下载一次），然后自动解压；
+3. 右上角「设置」里填你自己的 API Key（Kimi / DeepSeek / OpenAI / Claude 任选）；
+4. 回到主界面点「进入工作台」—— **不会再问你 Token**。
+
+之后的每次打开：服务自动启动，工作台自动打开。
+
+---
+
+## 能力
+
+- **前台服务保活**：切到别的应用、锁屏，运行时不会被系统回收；通知栏常驻状态。
+- **崩溃自愈**：服务进程退出后自动重启，不需要手动干预。
+- **免 Token 进入**：App 启动服务后读取 `server.token`，直接用 `#token=` 打开工作台。
+- **外部存储**：申请了读写权限，`/sdcard` 直接挂进 Linux 环境，工作区可以放你的真实项目。
+- **模型切换**：设置页写 `config.toml`，改完重启运行时生效。
+
+---
+
+## 目录结构
+
+```
+android/                         原生 Android 工程（Kotlin）
+  app/src/main/assets/proot/     proot 二进制与依赖库（arm64）
+  app/src/main/java/.../
+    MainActivity.kt              启动界面 + 工作台 WebView
+    SettingsActivity.kt          模型 / API Key 配置
+    RuntimeService.kt            前台服务：安装、启动、保活、看护
+    Installer.kt                 下载 rootfs、释放 proot
+    TarExtractor.kt              流式 tar.gz 解压器（自带，不依赖外部命令）
+    ProotRuntime.kt              组装并启动 proot 命令行
+    ConfigWriter.kt              写 ~/.kimi-code/config.toml
+.github/workflows/build-apk.yml  CI：测试 + 编译 + 发布
 ```
 
-常用命令：
-
-```bash
-bash /workspace/kimicode/kimi-serve.sh status    # 查看状态
-bash /workspace/kimicode/kimi-serve.sh restart   # 重启
-bash /workspace/kimicode/kimi-serve.sh logs      # 实时日志
-```
-
 ---
 
-## 🔧 工作原理
+## 原理
 
 ```
 手机桌面图标
      │
      ▼
-Kimi Code APK (WebView 启动器)
-     │  探测 http://127.0.0.1:58630/
+RuntimeService（前台服务）
+     │  首次：下载 rootfs.tar.gz → TarExtractor 解压到 filesDir/rootfs
+     │  之后：直接复用
      ▼
-本地容器中的 kimi web 服务  ←── kimi-serve.sh 守护（自动拉起 / 崩溃重启）
+proot -0 -r <filesDir>/rootfs … /opt/kimi/entrypoint.sh
      │
      ▼
-Kimi Code Web 工作台（免 Token，直接用你自己的 API Key）
+node dist/main.mjs web --host 127.0.0.1 --port 58630
+     │  写入 rootfs/root/.kimi-code/server.token
+     ▼
+MainActivity 读取 token → WebView 打开 http://127.0.0.1:58630/#token=…
 ```
-
-启动器本身不包含 Linux 运行时，它连接的是运行在本地容器里的 Kimi Code 服务。
-服务由 `kimi-serve.sh` 守护：终端启动时自动拉起，进程崩溃 3 秒后自动重启。
 
 ---
 
-## 🛠️ 本地开发
+## 本地构建
 
 ```bash
-npm install
-npx cap add android
-npx cap sync android
-node scripts/inject-permissions.mjs
-cd android && ./gradlew assembleDebug
+cd android
+gradle --offline :app:assembleRelease      # 本机离线仓库
+# 或
+./gradlew :app:assembleRelease             # 联网环境
 ```
 
-产物：`android/app/build/outputs/apk/debug/app-debug.apk`
+产物：`android/app/build/outputs/apk/release/app-release.apk`
+
+单元测试：
+
+```bash
+cd android
+gradle :app:testReleaseUnitTest
+# 用真实 rootfs 归档验证解压器（可选）
+gradle :app:testReleaseUnitTest -Dkimi.rootfs=/path/to/rootfs-arm64.tar.gz
+```
+
+---
+
+## 已知限制
+
+- **只支持 arm64**，Android 10 及以上；
+- 首次安装需要联网下载运行环境；
+- 运行时占用约 **250 MB** 磁盘（在 App 私有目录）；
+- APK 目前用 debug 签名发布，不同签名版本之间不能覆盖安装，升级时请先卸载旧版。

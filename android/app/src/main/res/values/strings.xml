@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Kimi Code</string>
+    <string name="app_subtitle">本地 AI 编码运行时 · 无需终端</string>
+    <string name="status_idle">尚未启动</string>
+    <string name="status_idle_detail">点击下方按钮，首次使用会自动下载并安装运行环境</string>
+    <string name="action_start">启动运行环境</string>
+    <string name="action_open">进入工作台</string>
+    <string name="action_restart">重启</string>
+    <string name="action_stop">停止</string>
+    <string name="action_logs">日志</string>
+    <string name="action_launcher">返回启动器</string>
+    <string name="action_save">保存配置</string>
+    <string name="launcher_hint">运行环境完全位于手机本地，数据不会离开设备（模型请求除外）。</string>
+    <string name="settings_title">设置</string>
+    <string name="settings_hint">填入你自己的模型 API Key，App 会自动生成配置，重启后生效。</string>
+    <string name="field_provider">模型服务商</string>
+    <string name="field_base_url">接口地址</string>
+    <string name="field_api_key">API Key</string>
+    <string name="field_model">模型名称</string>
+    <string name="field_context">上下文长度</string>
+    <string name="hint_base_url">https://api.example.com/v1</string>
+    <string name="hint_model">例如 deepseek-chat</string>
+    <string name="hint_context">例如 131072</string>
+    <string name="setting_auto_enter">就绪后自动进入工作台</string>
+</resources>

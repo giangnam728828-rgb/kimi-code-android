@@ -18,40 +18,32 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
       - name: Set up Java 21 (Temurin)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
 
-      - name: Install Project Dependencies
-        run: |
-          npm install
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Initialize & Sync Capacitor Android
-        run: |
-          npx cap add android || true
-          npx cap sync android
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
 
-      - name: Inject Android System Permissions
-        run: |
-          node scripts/inject-permissions.mjs
-
-      - name: Build Debug APK with Gradle
+      - name: Unit Tests
         working-directory: android
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+        run: gradle --no-daemon :app:testReleaseUnitTest
+
+      - name: Build Release APK
+        working-directory: android
+        run: gradle --no-daemon :app:assembleRelease
 
       - name: Rename APK for Distribution
         run: |
           mkdir -p output
-          cp android/app/build/outputs/apk/debug/app-debug.apk output/Kimi-Code-Android.apk
+          cp android/app/build/outputs/apk/release/app-release.apk output/Kimi-Code-Android.apk
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -64,27 +56,34 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
         with:
-          tag_name: v1.2.0
-          name: "Kimi Code on Android v1.2.0 (自动连接版)"
+          tag_name: v3.0.0-rc1
+          name: "Kimi Code on Android v3.0.0-rc1 (自带运行环境)"
           draft: false
-          prerelease: false
+          prerelease: true
           body: |
-            ## 📱 Kimi Code on Android 移动端启动器 v1.2.0
+            ## 📱 Kimi Code on Android v3.0.0-rc1
 
-            本次更新的重点：**打开 App 就能用，不再需要手动敲命令启动服务。**
+            这一版不再依赖电脑或终端里的服务：**Linux 运行环境、Node 运行时和整套 Kimi Code 服务端都随 App 一起装到手机上**。
 
-            - **自动连接**：App 启动即探测本地服务，就绪后可直接进入工作台；
-            - **断线自动重试**：服务未就绪时每 2.5 秒自动重试，服务一起来就自动连上；
-            - **可选"打开即进入"**：设置中可开启，跳过启动面板直达工作台；
-            - **真实状态显示**：不再显示虚假的启动日志，只反映实际探测结果；
-            - **全屏沉浸**：无地址栏，返回键可直接退回启动面板。
+            ### 装了就能用
+            1. 安装 `Kimi-Code-Android.apk`；
+            2. 打开 App —— 首次会下载约 87 MB 的运行环境并解压（一次性）；
+            3. 解压完成后自动启动服务，并直接带 Token 打开工作台，**不会再问你要 Token**。
 
-            ### 🚀 使用方法
-            1. 下载下方的 `Kimi-Code-Android.apk` 安装；
-            2. 服务会在 PocketDev 终端打开时**自动拉起**（已配置启动钩子），无需手动执行；
-            3. 打开 App，等待状态变为"已就绪"，点击进入工作台即可。
+            ### 自带的组件
+            - Ubuntu arm64 精简根文件系统
+            - Node.js 24 运行时
+            - Kimi Code 服务端 + Web 工作台
+            - proot（免 Root 运行 Linux）
+            - 内置 ripgrep
 
-            > 若服务确实未启动，可在终端执行：`bash /workspace/kimicode/kimi-serve.sh start`
+            ### 能力
+            - 前台服务常驻保活，切走应用不会掉；
+            - 服务崩溃自动重启；
+            - 设置页可直接填写 Kimi / DeepSeek / OpenAI / Claude 的 API Key；
+            - 申请外部存储权限，工作区可直接读写 `/sdcard`。
+
+            > 模型接口需在 App 的设置页填写你自己的 API Key。
           files: |
             output/Kimi-Code-Android.apk
         env:

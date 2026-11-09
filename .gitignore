@@ -1,6 +1,9 @@
 node_modules/
 output/
+android/.gradle/
+android/build/
 android/app/build/
-.gradle/
+android/local.properties
 *.apk
+*.iml
 .DS_Store
