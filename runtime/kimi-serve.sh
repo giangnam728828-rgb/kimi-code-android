@@ -13,10 +13,10 @@
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_DIR="$DIR/.run"
-PID_FILE="$RUN_DIR/kimi-web.pid"
-LOG_FILE="$RUN_DIR/kimi-web.log"
 PORT="${PORT:-58630}"
 HOST="${HOST:-0.0.0.0}"
+PID_FILE="$RUN_DIR/kimi-web-$PORT.pid"
+LOG_FILE="$RUN_DIR/kimi-web-$PORT.log"
 
 mkdir -p "$RUN_DIR"
 
