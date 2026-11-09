@@ -37,3 +37,16 @@ if (fs.existsSync(manifestPath)) {
 } else {
   console.log('⚠️ AndroidManifest.xml not found, skipping injection.');
 }
+
+// 让 APK 的版本号跟随 package.json，避免每次构建都显示 1.0
+const gradlePath = path.resolve('android/app/build.gradle');
+if (fs.existsSync(gradlePath)) {
+  const pkg = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
+  const [major, minor, patch] = String(pkg.version || '1.0.0').split('.').map((n) => Number(n) || 0);
+  const versionCode = major * 10000 + minor * 100 + patch;
+  let gradle = fs.readFileSync(gradlePath, 'utf8');
+  gradle = gradle.replace(/versionCode\s+\d+/, `versionCode ${versionCode}`);
+  gradle = gradle.replace(/versionName\s+"[^"]*"/, `versionName "${pkg.version}"`);
+  fs.writeFileSync(gradlePath, gradle, 'utf8');
+  console.log(`✅ Version set to ${pkg.version} (code ${versionCode})`);
+}

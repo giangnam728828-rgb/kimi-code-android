@@ -272,7 +272,10 @@
   discover(false);
 
   // Android 原生返回键：在工作台时退回启动面板，否则最小化退出
-  const capApp = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+  const cap = window.Capacitor;
+  const capApp =
+    (cap && cap.Plugins && cap.Plugins.App) ||
+    (cap && typeof cap.registerPlugin === 'function' ? cap.registerPlugin('App') : null);
   if (capApp && typeof capApp.addListener === 'function') {
     capApp.addListener('backButton', () => {
       if (!workspaceView.classList.contains('hidden')) {
