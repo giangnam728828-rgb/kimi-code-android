@@ -270,4 +270,20 @@
   inputCustomUrl.value = currentUrl;
   setReadyState(false);
   discover(false);
+
+  // Android 原生返回键：在工作台时退回启动面板，否则最小化退出
+  const capApp = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+  if (capApp && typeof capApp.addListener === 'function') {
+    capApp.addListener('backButton', () => {
+      if (!workspaceView.classList.contains('hidden')) {
+        closeWorkspace();
+        return;
+      }
+      if (capApp.minimizeApp) {
+        capApp.minimizeApp();
+      } else if (capApp.exitApp) {
+        capApp.exitApp();
+      }
+    });
+  }
 })();

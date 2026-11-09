@@ -48,6 +48,8 @@ run_foreground() {
     . "$DIR/.env"
     set +a
   fi
+  # 允许手机 App 的 WebView 内嵌工作台（幂等补丁）
+  node "$DIR/patch-csp.mjs" >/dev/null 2>&1 || true
   exec node "$DIR/apps/kimi-code/dist/main.mjs" web \
     --port "$PORT" \
     --host "$HOST" \
@@ -76,9 +78,22 @@ supervise() {
 }
 
 # --- 启动并等待就绪 -----------------------------------------------------------
+csp_ok() {
+  local hdr
+  hdr=$(curl -s -D - -o /dev/null --max-time 3 "http://127.0.0.1:$PORT/" 2>/dev/null | tr -d '\r' | grep -i '^content-security-policy:')
+  case "$hdr" in
+    *"http://localhost"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 start() {
   if is_up; then
     echo "✅ Kimi Code 服务已在运行: http://127.0.0.1:$PORT/"
+    if ! csp_ok; then
+      echo "⚠️  当前实例是补丁前的旧进程，App 内嵌工作台会白屏。"
+      echo "   请重启 PocketDev 容器后重新执行: bash $DIR/kimi-serve.sh start"
+    fi
     return 0
   fi
   if pid_alive; then
