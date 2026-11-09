@@ -613,11 +613,9 @@ class MainActivity : Activity() {
         }
         valueWorkspace.text = Prefs.workspace(this)
 
-        if (logText.text.isNullOrEmpty() || Runtime.snapshotLogs().isNotEmpty()) {
-            val lines = Runtime.snapshotLogs()
-            logText.text = if (lines.isEmpty()) getString(R.string.log_empty) else lines.joinToString("\n")
-            logContainer.post { logContainer.fullScroll(View.FOCUS_DOWN) }
-        }
+        val lines = Runtime.snapshotLogs()
+        logText.text = if (lines.isEmpty()) getString(R.string.log_empty) else lines.joinToString("\n")
+        logContainer.post { logContainer.fullScroll(View.FOCUS_DOWN) }
 
         applyKeepAwake()
 
