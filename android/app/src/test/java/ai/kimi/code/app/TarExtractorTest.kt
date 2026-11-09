@@ -83,4 +83,29 @@ class TarExtractorTest {
         assertTrue(!File(tmp.parentFile, "evil.txt").exists())
         tmp.deleteRecursively()
     }
+
+    /** The APK ships an already-unpacked tar stream; it must not be gunzipped. */
+    @Test
+    fun extractsPlainTarWithoutGzipHeader() {
+        val tmp = File(System.getProperty("java.io.tmpdir"), "tartest3-${System.nanoTime()}")
+        val archive = File(tmp, "t.tar.gz")
+        tmp.mkdirs()
+        FileOutputStream(archive).use { out ->
+            for ((name, type, data) in listOf(
+                Triple("./bin", '5', ByteArray(0)),
+                Triple("./bin/hello.sh", '0', "#!/bin/sh\necho plain\n".toByteArray()),
+            )) {
+                out.write(header(name, type, data.size.toLong()))
+                out.write(data)
+                val pad = (512 - data.size % 512) % 512
+                if (pad > 0) out.write(ByteArray(pad))
+            }
+            out.write(ByteArray(1024))
+        }
+        val dest = File(tmp, "root")
+        TarExtractor.extractGzip(archive, dest) {}
+        assertEquals("#!/bin/sh\necho plain\n", File(dest, "bin/hello.sh").readText())
+        assertTrue(File(dest, "bin/hello.sh").canExecute())
+        tmp.deleteRecursively()
+    }
 }

@@ -26,8 +26,25 @@ object TarExtractor {
     private const val BLOCK = 512
 
     fun extractGzip(archive: File, destination: File, onProgress: (Progress) -> Unit) {
-        GZIPInputStream(BufferedInputStream(archive.inputStream(), 1 shl 16), 1 shl 16).use { input ->
-            extract(input, destination, onProgress)
+        archive.inputStream().use { extractGzip(it, destination, onProgress) }
+    }
+
+    /**
+     * Accepts either a gzip-compressed tar or a plain tar. AGP un-gzips
+     * `*.tar.gz` assets while packaging the APK, so the bundled archive is a
+     * raw tar stream even though the source file is gzipped.
+     */
+    fun extractGzip(source: InputStream, destination: File, onProgress: (Progress) -> Unit) {
+        val buffered = BufferedInputStream(source, 1 shl 16)
+        buffered.mark(2)
+        val first = buffered.read()
+        val second = buffered.read()
+        buffered.reset()
+        val gzipped = first == 0x1f && second == 0x8b
+        if (gzipped) {
+            GZIPInputStream(buffered, 1 shl 16).use { extract(it, destination, onProgress) }
+        } else {
+            extract(buffered, destination, onProgress)
         }
     }
 

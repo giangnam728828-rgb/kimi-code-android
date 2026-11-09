@@ -44,7 +44,6 @@ object ProotRuntime {
         val command = buildList {
             add(prootBin.absolutePath)
             add("--link2symlink")
-            add("--kill-on-exit")
             add("-0")
             add("-r")
             add(rootfs.absolutePath)
@@ -75,20 +74,22 @@ object ProotRuntime {
         }
 
         val builder = ProcessBuilder(command)
-        builder.directory(context.filesDir)
+        builder.directory(Paths.prootDir(context))
         builder.redirectErrorStream(true)
         val env = builder.environment()
         env.clear()
         env["LD_LIBRARY_PATH"] = Paths.prootDir(context).absolutePath
         env["PROOT_LOADER"] = loader.absolutePath
-        env["PROOT_LOADER_32"] = loader.absolutePath
         env["PROOT_TMP_DIR"] = Paths.tmpDir(context).absolutePath
         env["PROOT_NO_SECCOMP"] = "1"
         env["HOME"] = Paths.prootDir(context).absolutePath
+        env["TMPDIR"] = Paths.tmpDir(context).absolutePath
 
         Runtime.log("启动 proot: 端口 $port")
         stopping = false
-        val started = builder.start()
+        val started = runCatching { builder.start() }.getOrElse { error ->
+            throw IllegalStateException("无法启动 proot：${error.message}", error)
+        }
         process = started
         pumpOutput(started)
         return started
@@ -118,6 +119,7 @@ object ProotRuntime {
                 }
             }
             val code = runCatching { target.waitFor() }.getOrDefault(-1)
+            lastExit = code
             Runtime.log("proot 进程退出，退出码 $code")
         }.apply { isDaemon = true }.start()
     }
@@ -174,11 +176,20 @@ object ProotRuntime {
                 val token = readToken(context)
                 if (token != null) return token
             }
-            if (process?.isAlive != true) return null
+            if (process?.isAlive != true) {
+                Runtime.log("proot 在服务就绪前退出，放弃等待")
+                return null
+            }
             runCatching { Thread.sleep(600) }
         }
+        Runtime.log("等待服务就绪超时（${timeoutMs / 1000} 秒）")
         return null
     }
+
+    /** Human-readable reason why the last launch died, for the UI. */
+    fun lastExitCode(): Int? = lastExit
+
+    @Volatile private var lastExit: Int? = null
 
     fun readToken(context: Context): String? {
         return runCatching {

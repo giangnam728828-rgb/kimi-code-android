@@ -34,7 +34,8 @@ class RuntimeService : Service() {
         }
 
         fun stop(context: Context) {
-            context.startService(Intent(context, RuntimeService::class.java).setAction(ACTION_STOP))
+            val intent = Intent(context, RuntimeService::class.java).setAction(ACTION_STOP)
+            runCatching { context.startService(intent) }
         }
 
         fun restart(context: Context) {
@@ -106,7 +107,7 @@ class RuntimeService : Service() {
 
                 val token = ProotRuntime.awaitToken(this, port)
                 if (token == null) {
-                    throw IllegalStateException("服务启动超时")
+                    throw IllegalStateException(explainLaunchFailure())
                 }
                 val url = "http://127.0.0.1:$port/#token=$token"
                 Runtime.markReady(port, url)
@@ -137,6 +138,30 @@ class RuntimeService : Service() {
             }
         }
         ProotRuntime.stop()
+    }
+
+    /**
+     * Turns the raw proot death into something the user can act on. The most
+     * common on-device failures are a linker error (missing shared object) and
+     * the Android 10+ W^X refusal to exec a writable file.
+     */
+    private fun explainLaunchFailure(): String {
+        val logs = Runtime.snapshotLogs().joinToString("\n")
+        val code = ProotRuntime.lastExitCode()
+        return when {
+            logs.contains("library") && logs.contains("not found") ->
+                "缺少运行库（proot 无法加载），请查看日志"
+            logs.contains("Permission denied") ->
+                "proot 无法执行：请检查存储权限或重新安装"
+            code == 126 || code == 127 ->
+                "proot 无法执行（退出码 $code）"
+            code == 139 || code == 11 ->
+                "proot 崩溃（段错误），此机型暂不兼容"
+            code != null ->
+                "服务未能启动（proot 退出码 $code）"
+            else ->
+                "服务启动超时，请查看日志"
+        }
     }
 
     private fun pickPort(): Int {

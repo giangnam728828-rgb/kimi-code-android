@@ -112,6 +112,7 @@ object ConfigWriter {
                 appendLine("base_url = \"${escape(baseUrl)}\"")
             }
             appendLine("api_key = \"${escape(settings.apiKey)}\"")
+            appendLine("default_model = \"${escape(settings.model)}\"")
             appendLine()
             appendLine("[models.$alias]")
             appendLine("provider = \"$alias\"")
