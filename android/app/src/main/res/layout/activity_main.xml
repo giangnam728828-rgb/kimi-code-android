@@ -1285,5 +1285,45 @@
             android:layout_width="36dp"
             android:layout_height="36dp"
             android:layout_gravity="center" />
+
+        <LinearLayout
+            android:id="@+id/webErrorBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="28dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/webErrorTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_primary"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/webErrorDetail"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/webErrorRetry"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/btn_primary"
+                android:paddingStart="24dp"
+                android:paddingEnd="24dp"
+                android:text="@string/web_error_retry"
+                android:textAllCaps="false"
+                android:textColor="@color/white" />
+        </LinearLayout>
     </FrameLayout>
 </FrameLayout>

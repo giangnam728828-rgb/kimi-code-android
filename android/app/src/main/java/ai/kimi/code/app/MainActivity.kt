@@ -9,8 +9,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Message
 import android.text.InputType
 import android.view.GestureDetector
 import android.view.MotionEvent
@@ -20,6 +22,8 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -79,12 +83,17 @@ class MainActivity : Activity() {
     private lateinit var webContainer: View
     private lateinit var webView: WebView
     private lateinit var webLoading: ProgressBar
+    private lateinit var webErrorBox: View
+    private lateinit var webErrorTitle: TextView
+    private lateinit var webErrorDetail: TextView
 
     private lateinit var navItems: List<Pair<View, Pair<TextView, TextView>>>
 
     private var loadedUrl: String? = null
     private var workspaceVisible = false
     private var currentPage = R.id.pageHome
+    private var lastExternalUrl: String? = null
+    private var lastExternalAt = 0L
 
     private val listener: () -> Unit = { runOnUiThread { render() } }
 
@@ -144,6 +153,10 @@ class MainActivity : Activity() {
         webContainer = findViewById(R.id.webContainer)
         webView = findViewById(R.id.webView)
         webLoading = findViewById(R.id.webLoading)
+        webErrorBox = findViewById(R.id.webErrorBox)
+        webErrorTitle = findViewById(R.id.webErrorTitle)
+        webErrorDetail = findViewById(R.id.webErrorDetail)
+        findViewById<View>(R.id.webErrorRetry).setOnClickListener { reloadWorkspace() }
 
         btnPrimary.setOnClickListener { onPrimaryAction() }
         btnRestart.setOnClickListener {
@@ -319,11 +332,76 @@ class MainActivity : Activity() {
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
         webView.setBackgroundColor(Color.WHITE)
-        webView.webChromeClient = WebChromeClient()
+        // The web UI opens the Kimi sign-in page with `window.open`, and the
+        // sign-in page itself is an external origin. Loading either of those in
+        // this WebView replaces the workspace with a page this app cannot render,
+        // which shows up as a blank screen. Popups are therefore routed to the
+        // content owner below and never into the workspace WebView.
+        settings.setSupportMultipleWindows(true)
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onCreateWindow(
+                view: WebView?,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: Message?,
+            ): Boolean {
+                val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                // The popup URL is not on the message, so hand the transport a
+                // throwaway WebView whose only job is to report that first URL.
+                val probe = WebView(this@MainActivity)
+                probe.webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView?,
+                        request: WebResourceRequest?,
+                    ): Boolean = openExternally(request?.url?.toString())
+
+                    @Deprecated("Superseded by the WebResourceRequest overload")
+                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean =
+                        openExternally(url)
+
+                    // Some popups start from `about:blank` and only navigate later;
+                    // this catches the ones `shouldOverrideUrlLoading` misses.
+                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                        super.onPageStarted(view, url, favicon)
+                        if (url == null || url.startsWith("about:")) return
+                        openExternally(url)
+                    }
+                }
+                transport.webView = probe
+                resultMsg.sendToTarget()
+                return true
+            }
+        }
         webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(
+                view: WebView?,
+                request: WebResourceRequest?,
+            ): Boolean {
+                val uri = request?.url ?: return false
+                return handleNavigation(uri)
+            }
+
+            @Deprecated("Superseded by the WebResourceRequest overload")
+            override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                val uri = url?.let(Uri::parse) ?: return false
+                return handleNavigation(uri)
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 webLoading.visibility = View.GONE
+            }
+
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: WebResourceError?,
+            ) {
+                super.onReceivedError(view, request, error)
+                // Only the top document matters; sub-resource failures are noise.
+                if (request?.isForMainFrame != true) return
+                val detail = error?.description?.toString().orEmpty()
+                showWebError(detail.ifEmpty { "页面加载失败" })
             }
         }
         // Swipe from the left edge to go back to the launcher, same as DSHA.
@@ -353,14 +431,67 @@ class MainActivity : Activity() {
             return
         }
         workspaceVisible = true
-        if (loadedUrl != Runtime.workspaceUrl) {
+        if (loadedUrl != Runtime.workspaceUrl || webErrorBox.visibility == View.VISIBLE) {
             loadedUrl = Runtime.workspaceUrl
-            webLoading.visibility = View.VISIBLE
-            webView.loadUrl(Runtime.workspaceUrl)
+            reloadWorkspace()
         }
         shell.visibility = View.GONE
         webContainer.visibility = View.VISIBLE
         applyImmersive(true)
+    }
+
+    private fun reloadWorkspace() {
+        val url = Runtime.workspaceUrl
+        if (url.isEmpty()) return
+        webErrorBox.visibility = View.GONE
+        webLoading.visibility = View.VISIBLE
+        webView.loadUrl(url)
+    }
+
+    /**
+     * Keeps the workspace itself in the WebView and sends everything else to the
+     * app that owns it. This is what makes the Kimi sign-in work: the device-code
+     * page belongs in a browser, and the workspace has to stay loaded so it can
+     * pick the sign-in up when the user comes back.
+     */
+    private fun handleNavigation(uri: Uri): Boolean {
+        val url = uri.toString()
+        // The sign-in device flow, docs links and `mailto:` handoffs all belong
+        // to another app; blob/data URLs stay with the WebView that made them.
+        if (!LinkPolicy.shouldOpenExternally(url, Runtime.port)) return false
+        return openExternally(url)
+    }
+
+    private fun openExternally(url: String?): Boolean {
+        if (url.isNullOrBlank()) return true
+        // `about:`, `blob:` and friends have nowhere to go; keep them quiet.
+        if (!LinkPolicy.canHandOff(url)) return true
+        // A popup can report the same target twice (cancel + started); one
+        // browser launch per link is enough.
+        val now = System.currentTimeMillis()
+        if (url == lastExternalUrl && now - lastExternalAt < 1500) return true
+        lastExternalUrl = url
+        lastExternalAt = now
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK,
+        )
+        return runCatching {
+            startActivity(intent)
+            toast(getString(R.string.web_open_browser_hint))
+            true
+        }.getOrElse {
+            Runtime.log("无法打开外部链接：$url")
+            toast(getString(R.string.web_no_browser))
+            true
+        }
+    }
+
+    private fun showWebError(detail: String) {
+        webLoading.visibility = View.GONE
+        webErrorBox.visibility = View.VISIBLE
+        webErrorTitle.text = getString(R.string.web_error_title)
+        webErrorDetail.text = getString(R.string.web_error_body, detail)
+        Runtime.log("工作台加载失败：$detail")
     }
 
     /**
@@ -908,7 +1039,17 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (workspaceVisible) applyImmersive(true)
+        // WebView.onResume fires `visibilitychange` inside the page. The web UI
+        // only re-polls the sign-in flow when the document becomes visible again,
+        // so without this the user returns from the browser and stays stuck on
+        // "waiting" until the next timer tick.
+        runCatching { webView.onResume() }
         render()
+    }
+
+    override fun onPause() {
+        runCatching { webView.onPause() }
+        super.onPause()
     }
 
     override fun onDestroy() {

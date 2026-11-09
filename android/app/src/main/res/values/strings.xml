@@ -105,4 +105,10 @@
     <string name="restore_confirm_body">恢复会覆盖容器里同名的文件（会话、配置、插件、工作区）。确定继续吗？</string>
     <string name="backup_share_title">分享备份文件</string>
     <string name="backup_pick_title">选择备份文件</string>
+
+    <string name="web_error_retry">重新加载</string>
+    <string name="web_error_title">工作台打不开</string>
+    <string name="web_error_body">%1$s</string>
+    <string name="web_open_browser_hint">已用浏览器打开授权页，登录后回到本 App 即可</string>
+    <string name="web_no_browser">没有找到可以打开该链接的应用</string>
 </resources>
