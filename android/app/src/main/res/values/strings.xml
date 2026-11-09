@@ -1,26 +1,81 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Kimi Code</string>
-    <string name="app_subtitle">本地 AI 编码运行时 · 无需终端</string>
+
+    <string name="nav_home">首页</string>
+    <string name="nav_plugins">插件</string>
+    <string name="nav_settings">设置</string>
+    <string name="nav_terminal">终端</string>
+    <string name="nav_air">工作台</string>
+
+    <string name="icon_home">◉</string>
+    <string name="icon_plugins">◈</string>
+    <string name="icon_settings">⚙</string>
+    <string name="icon_terminal">▣</string>
+
     <string name="status_idle">尚未启动</string>
-    <string name="status_idle_detail">点击下方按钮，首次使用会自动下载并安装运行环境</string>
-    <string name="action_start">启动运行环境</string>
+    <string name="status_idle_detail">点下面的按钮启动本地环境，首次启动要等它解压（一次性）</string>
+    <string name="action_start">启动</string>
     <string name="action_open">进入工作台</string>
     <string name="action_restart">重启</string>
     <string name="action_stop">停止</string>
-    <string name="action_logs">日志</string>
-    <string name="action_launcher">返回启动器</string>
+    <string name="action_copy">复制</string>
+    <string name="action_enable">开启</string>
+    <string name="action_disable">关闭</string>
+    <string name="action_configure">配置</string>
+    <string name="action_change">修改</string>
+    <string name="action_save_log">导出日志</string>
     <string name="action_save">保存配置</string>
-    <string name="launcher_hint">运行环境完全位于手机本地，数据不会离开设备（模型请求除外）。</string>
-    <string name="settings_title">设置</string>
-    <string name="settings_hint">填入你自己的模型 API Key，App 会自动生成配置，重启后生效。</string>
+    <string name="action_add_plugin">打开工作台管理插件</string>
+
+    <string name="section_runtime">运行状态</string>
+    <string name="section_logs">运行日志</string>
+    <string name="section_model">模型</string>
+    <string name="section_experience">体验</string>
+    <string name="section_about">关于</string>
+
+    <string name="row_address">工作台地址</string>
+    <string name="row_lan">LAN 访问</string>
+    <string name="row_model">当前模型</string>
+    <string name="row_workspace">工作区目录</string>
+
+    <string name="value_not_running">未运行</string>
+    <string name="value_lan_off">已关闭，只能在本机访问</string>
+    <string name="value_lan_on">已开启，同一 Wi-Fi 下可访问</string>
+    <string name="action_remove">移除</string>
+    <string name="save_ok">已保存并写入配置，重启运行环境后生效</string>
+    <string name="save_need_key">已保存，但还缺少 API Key 或模型名称</string>
+    <string name="value_model_empty">尚未配置，去设置里填 API Key</string>
+    <string name="log_empty">暂无日志</string>
+
+    <string name="settings_hint">填入你自己的模型 API Key，App 会自动写入配置，重启后生效。</string>
     <string name="field_provider">模型服务商</string>
     <string name="field_base_url">接口地址</string>
     <string name="field_api_key">API Key</string>
     <string name="field_model">模型名称</string>
     <string name="field_context">上下文长度</string>
     <string name="hint_base_url">https://api.example.com/v1</string>
-    <string name="hint_model">例如 deepseek-chat</string>
+    <string name="hint_model">例如 kimi-k2-turbo-preview</string>
+    <string name="hint_api_key">sk-…</string>
     <string name="hint_context">例如 131072</string>
+
     <string name="setting_auto_enter">就绪后自动进入工作台</string>
+    <string name="setting_auto_enter_sub">打开 App 直接跳到工作台，不再停在首页</string>
+    <string name="setting_swipe_back">边缘滑动返回</string>
+    <string name="setting_swipe_back_sub">从屏幕左侧往右滑回到启动页</string>
+    <string name="setting_lan">允许局域网访问</string>
+    <string name="setting_lan_sub">让同一 Wi-Fi 下的电脑也能打开工作台，需重启生效</string>
+    <string name="setting_keep_awake">工作台常亮</string>
+    <string name="setting_keep_awake_sub">工作台打开时保持屏幕不熄灭</string>
+
+    <string name="about_version">版本 %1$s</string>
+    <string name="about_body">运行环境完全在手机本地，数据不离开设备（模型请求除外）。</string>
+
+    <string name="plugin_enabled">已启用</string>
+    <string name="plugin_disabled">已停用</string>
+    <string name="plugins_intro">插件由智能体自己管理，安装在容器内的 ~/.kimi-code/plugins。在工作台里输入 /plugins 即可安装、启用或停用；这里显示的是当前实际已装好的插件。</string>
+    <string name="plugin_empty">还没有安装任何插件。点下面的按钮进入工作台，输入 /plugins 开始安装。</string>
+    <string name="term_welcome">在本地 Linux 环境里执行命令（工作目录 /root/workspace）。\n</string>
+    <string name="term_hint">输入命令，例如 ls -la</string>
+    <string name="term_send">执行</string>
 </resources>

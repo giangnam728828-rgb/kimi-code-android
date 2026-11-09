@@ -21,28 +21,53 @@ object ProotRuntime {
 
     fun isRunning(): Boolean = process?.isAlive == true
 
-    fun pid(): Long? = runCatching {
-        val current = process ?: return null
-        val method = Process::class.java.getMethod("pid")
-        method.invoke(current) as? Long
-    }.getOrNull()
-
     fun start(context: Context, port: Int): Process {
         stop()
 
-        val prootBin = Paths.prootBin(context)
-        val loader = Paths.prootLoader(context)
-        val rootfs = Paths.rootfs(context)
-
-        require(prootBin.isFile) { "proot 未安装" }
-        require(loader.isFile) { "proot loader 未安装" }
-        require(File(rootfs, "opt/kimi/entrypoint.sh").isFile) { "rootfs 未安装" }
+        require(Paths.prootBin(context).isFile) { "proot 未安装" }
+        require(Paths.prootLoader(context).isFile) { "proot loader 未安装" }
+        require(File(Paths.rootfs(context), "opt/kimi/entrypoint.sh").isFile) { "rootfs 未安装" }
 
         writeResolvConf(context)
         ConfigWriter.applyIfConfigured(context)
 
+        val host = if (Prefs.lan(context)) "0.0.0.0" else "127.0.0.1"
+        val extra = buildList {
+            add("KIMI_PORT=$port")
+            add("KIMI_HOST=$host")
+            add("KIMI_WORKDIR=${Prefs.workspace(context)}")
+        }
+
+        Runtime.log("启动 proot：端口 $port（监听 $host）")
+        stopping = false
+        val started = runCatching {
+            proot(context, listOf("/bin/bash", "/opt/kimi/entrypoint.sh"), extra)
+        }.getOrElse { error ->
+            throw IllegalStateException("无法启动 proot：${error.message}", error)
+        }
+        process = started
+        pumpOutput(started)
+        return started
+    }
+
+    /**
+     * Runs a one-shot command inside the same rootfs. Used by the terminal page
+     * and by the plugin installer; returns the process with merged output.
+     */
+    fun shell(context: Context, script: String, extraEnv: List<String> = emptyList()): Process {
+        val env = buildList {
+            add("KIMI_WORKDIR=${Prefs.workspace(context)}")
+            addAll(extraEnv)
+        }
+        return proot(context, listOf("/bin/bash", "-lc", script), env)
+    }
+
+    private fun proot(context: Context, entry: List<String>, env: List<String>): Process {
+        val prootDir = Paths.prootDir(context)
+        val rootfs = Paths.rootfs(context)
+
         val command = buildList {
-            add(prootBin.absolutePath)
+            add(Paths.prootBin(context).absolutePath)
             add("--link2symlink")
             add("-0")
             add("-r")
@@ -59,7 +84,7 @@ object ProotRuntime {
                 add(external.absolutePath)
             }
             add("-w")
-            add("/root/workspace")
+            add("/root")
             add("/usr/bin/env")
             add("-i")
             add("HOME=/root")
@@ -68,31 +93,22 @@ object ProotRuntime {
             add("TERM=xterm-256color")
             add("LANG=C.UTF-8")
             add("LC_ALL=C.UTF-8")
-            add("KIMI_PORT=$port")
-            add("/bin/bash")
-            add("/opt/kimi/entrypoint.sh")
+            addAll(env)
+            addAll(entry)
         }
 
         val builder = ProcessBuilder(command)
-        builder.directory(Paths.prootDir(context))
+        builder.directory(prootDir)
         builder.redirectErrorStream(true)
-        val env = builder.environment()
-        env.clear()
-        env["LD_LIBRARY_PATH"] = Paths.prootDir(context).absolutePath
-        env["PROOT_LOADER"] = loader.absolutePath
-        env["PROOT_TMP_DIR"] = Paths.tmpDir(context).absolutePath
-        env["PROOT_NO_SECCOMP"] = "1"
-        env["HOME"] = Paths.prootDir(context).absolutePath
-        env["TMPDIR"] = Paths.tmpDir(context).absolutePath
-
-        Runtime.log("启动 proot: 端口 $port")
-        stopping = false
-        val started = runCatching { builder.start() }.getOrElse { error ->
-            throw IllegalStateException("无法启动 proot：${error.message}", error)
-        }
-        process = started
-        pumpOutput(started)
-        return started
+        val environment = builder.environment()
+        environment.clear()
+        environment["LD_LIBRARY_PATH"] = prootDir.absolutePath
+        environment["PROOT_LOADER"] = Paths.prootLoader(context).absolutePath
+        environment["PROOT_TMP_DIR"] = Paths.tmpDir(context).absolutePath
+        environment["PROOT_NO_SECCOMP"] = "1"
+        environment["HOME"] = prootDir.absolutePath
+        environment["TMPDIR"] = Paths.tmpDir(context).absolutePath
+        return builder.start()
     }
 
     fun stop() {

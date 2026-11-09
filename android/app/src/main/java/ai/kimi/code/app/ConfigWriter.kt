@@ -3,7 +3,7 @@ package ai.kimi.code.app
 import android.content.Context
 import java.io.File
 
-/** Persisted model settings, edited in [SettingsActivity]. */
+/** Persisted user settings, edited on the in-app settings page. */
 object Prefs {
     private const val FILE = "kimi_prefs"
 
@@ -13,6 +13,12 @@ object Prefs {
     const val KEY_MODEL = "model"
     const val KEY_CONTEXT = "context"
     const val KEY_AUTO_ENTER = "auto_enter"
+    const val KEY_SWIPE_BACK = "swipe_back"
+    const val KEY_LAN = "lan"
+    const val KEY_KEEP_AWAKE = "keep_awake"
+    const val KEY_WORKSPACE = "workspace"
+
+    const val DEFAULT_WORKSPACE = "/root/workspace"
 
     data class ModelSettings(
         val provider: String,
@@ -24,14 +30,6 @@ object Prefs {
         val isConfigured: Boolean get() = apiKey.isNotBlank() && model.isNotBlank()
     }
 
-    val PRESETS = listOf(
-        Preset("kimi", "Kimi (Moonshot)", "kimi", "https://api.moonshot.cn/v1", "kimi-k2-turbo-preview", 262144),
-        Preset("deepseek", "DeepSeek", "openai", "https://api.deepseek.com/v1", "deepseek-chat", 131072),
-        Preset("openai", "OpenAI", "openai", "https://api.openai.com/v1", "gpt-4o", 128000),
-        Preset("anthropic", "Anthropic Claude", "anthropic", "https://api.anthropic.com/v1", "claude-sonnet-4-20250514", 200000),
-        Preset("custom", "自定义（OpenAI 兼容）", "openai", "", "", 131072),
-    )
-
     data class Preset(
         val id: String,
         val label: String,
@@ -39,6 +37,14 @@ object Prefs {
         val baseUrl: String,
         val model: String,
         val contextSize: Int,
+    )
+
+    val PRESETS = listOf(
+        Preset("kimi", "Kimi（Moonshot）", "kimi", "https://api.moonshot.cn/v1", "kimi-k2-turbo-preview", 262144),
+        Preset("deepseek", "DeepSeek", "openai", "https://api.deepseek.com/v1", "deepseek-chat", 131072),
+        Preset("openai", "OpenAI", "openai", "https://api.openai.com/v1", "gpt-4o", 128000),
+        Preset("anthropic", "Anthropic Claude", "anthropic", "https://api.anthropic.com/v1", "claude-sonnet-4-20250514", 200000),
+        Preset("custom", "自定义（OpenAI 兼容）", "openai", "", "", 131072),
     )
 
     fun preset(id: String): Preset = PRESETS.firstOrNull { it.id == id } ?: PRESETS.first()
@@ -56,15 +62,6 @@ object Prefs {
         )
     }
 
-    fun autoEnter(context: Context): Boolean =
-        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean(KEY_AUTO_ENTER, false)
-
-    fun setAutoEnter(context: Context, enabled: Boolean) {
-        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit()
-            .putBoolean(KEY_AUTO_ENTER, enabled)
-            .apply()
-    }
-
     fun save(context: Context, settings: ModelSettings) {
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit()
             .putString(KEY_PROVIDER, settings.provider)
@@ -74,6 +71,44 @@ object Prefs {
             .putInt(KEY_CONTEXT, settings.contextSize)
             .apply()
     }
+
+    private fun flag(context: Context, key: String, fallback: Boolean): Boolean =
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean(key, fallback)
+
+    private fun setFlag(context: Context, key: String, value: Boolean) {
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().putBoolean(key, value).apply()
+    }
+
+    fun autoEnter(context: Context): Boolean = flag(context, KEY_AUTO_ENTER, true)
+    fun setAutoEnter(context: Context, enabled: Boolean) = setFlag(context, KEY_AUTO_ENTER, enabled)
+
+    fun swipeBack(context: Context): Boolean = flag(context, KEY_SWIPE_BACK, true)
+    fun setSwipeBack(context: Context, enabled: Boolean) = setFlag(context, KEY_SWIPE_BACK, enabled)
+
+    fun lan(context: Context): Boolean = flag(context, KEY_LAN, false)
+    fun setLan(context: Context, enabled: Boolean) = setFlag(context, KEY_LAN, enabled)
+
+    fun keepAwake(context: Context): Boolean = flag(context, KEY_KEEP_AWAKE, true)
+    fun setKeepAwake(context: Context, enabled: Boolean) = setFlag(context, KEY_KEEP_AWAKE, enabled)
+
+    fun workspace(context: Context): String =
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getString(KEY_WORKSPACE, DEFAULT_WORKSPACE)
+            ?: DEFAULT_WORKSPACE
+
+    fun setWorkspace(context: Context, path: String) {
+        val normalized = path.trim().ifEmpty { DEFAULT_WORKSPACE }
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit()
+            .putString(KEY_WORKSPACE, normalized)
+            .apply()
+    }
+
+    /**
+     * Plugins are managed by the agent itself under `$KIMI_CODE_HOME/plugins`
+     * (`installed.json` + `managed/<id>`), so the app only reads that directory
+     * to report what is installed; installing happens through the workspace.
+     */
+    fun pluginsDir(context: Context): File =
+        File(File(File(Paths.rootfs(context), "root"), ".kimi-code"), "plugins")
 }
 
 /**
@@ -88,7 +123,7 @@ object ConfigWriter {
     fun applyIfConfigured(context: Context): Boolean {
         val settings = Prefs.load(context)
         if (!settings.isConfigured) {
-            Runtime.log("尚未配置模型，可在设置里填入 API Key")
+            Runtime.log("尚未配置模型，可在设置页填入 API Key")
             return false
         }
         return runCatching { write(context, settings) }

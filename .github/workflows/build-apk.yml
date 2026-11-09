@@ -54,6 +54,22 @@ jobs:
           echo "rootfs size: $SIZE bytes"
           test "$SIZE" -gt 50000000
 
+      # The archive is published once and is too large for git, so the runtime
+      # entrypoint lives in this repo and is patched into the archive here.
+      # Without this the archive would ship whatever script it was built with.
+      - name: Patch runtime entrypoint into the rootfs
+        run: |
+          set -euo pipefail
+          ARCHIVE="android/app/src/main/assets/rootfs-arm64.tar.gz"
+          WORK=$(mktemp -d)
+          tar -xzf "$ARCHIVE" -C "$WORK"
+          install -m 0755 runtime/entrypoint.sh "$WORK/opt/kimi/entrypoint.sh"
+          bash -n "$WORK/opt/kimi/entrypoint.sh"
+          grep -q 'KIMI_WORKDIR' "$WORK/opt/kimi/entrypoint.sh"
+          tar --numeric-owner --hard-dereference --sort=name -czf "$ARCHIVE" -C "$WORK" .
+          echo "patched entrypoint; archive now $(stat -c%s "$ARCHIVE") bytes"
+          rm -rf "$WORK"
+
       - name: Restore signing key
         id: keys
         run: |
@@ -118,7 +134,7 @@ jobs:
         if: github.ref == 'refs/heads/main'
         with:
           tag_name: rootfs-v1
-          name: "Kimi Code on Android v2.1.0 (运行环境已内置)"
+          name: "Kimi Code on Android v2.2.0 (运行环境已内置)"
           draft: false
           prerelease: false
           body: |
@@ -138,6 +154,13 @@ jobs:
             - Kimi Code 服务端 2.5.2 + Web 工作台
             - proot（免 Root 运行 Linux）
             - ripgrep
+
+            ### 这一版的新界面
+            - 底部四个标签页：**首页 / 插件 / 设置 / 终端**；
+            - 首页显示运行状态、访问地址、LAN 开关、当前模型和工作区路径；
+            - 工作台里**从屏幕左边缘往右滑**即可返回，右下角那个悬浮按钮已经去掉；
+            - 设置页补齐了自动进入、边缘滑动返回、局域网访问、屏幕常亮；
+            - 终端页可以在容器里直接执行命令。
 
             ### 能力
             - 前台服务常驻保活，切走应用不会掉；
