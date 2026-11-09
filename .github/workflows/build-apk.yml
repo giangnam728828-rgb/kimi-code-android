@@ -56,16 +56,25 @@ jobs:
           path: output/Kimi-Code-Android.apk
           if-no-files-found: error
 
+      - name: Fetch rootfs archive for the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -fL --retry 3 -o /tmp/rootfs-arm64.tar.gz \
+            "https://github.com/${{ github.repository }}/releases/download/rootfs-v1/rootfs-arm64.tar.gz"
+
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
         with:
-          tag_name: v3.0.0-rc1
-          name: "Kimi Code on Android v3.0.0-rc1 (自带运行环境)"
+          tag_name: rootfs-v1
+          name: "Kimi Code on Android v3.0.0 (自带运行环境)"
           draft: false
-          prerelease: true
+          prerelease: false
           body: |
-            ## 📱 Kimi Code on Android v3.0.0-rc1
+            ## 📱 Kimi Code on Android 运行环境
+
+            `Kimi-Code-Android.apk` 是应用本体；`rootfs-arm64.tar.gz` 是它首次启动时下载的运行环境，**不需要手动下载**。
 
             这一版不再依赖电脑或终端里的服务：**Linux 运行环境、Node 运行时和整套 Kimi Code 服务端都随 App 一起装到手机上**。
 
@@ -90,5 +99,6 @@ jobs:
             > 模型接口需在 App 的设置页填写你自己的 API Key。
           files: |
             output/Kimi-Code-Android.apk
+            /tmp/rootfs-arm64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
