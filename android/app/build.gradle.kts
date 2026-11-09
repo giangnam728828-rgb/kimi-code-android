@@ -11,8 +11,8 @@ android {
         applicationId = "ai.kimi.code.app"
         minSdk = 26
         targetSdk = 28
-        versionCode = 6
-        versionName = "2.3.0"
+        versionCode = 7
+        versionName = "2.4.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
@@ -27,11 +27,18 @@ android {
     signingConfigs {
         create("release") {
             val storePath = System.getenv("KEYSTORE_PATH")
+            val storePasswordEnv = System.getenv("KEYSTORE_PASSWORD")
             if (!storePath.isNullOrBlank() && file(storePath).isFile) {
+                // A keystore without its password fails deep inside packaging,
+                // where the message hides the real cause, so say it here.
+                check(!storePasswordEnv.isNullOrBlank()) {
+                    "KEYSTORE_PATH is set but KEYSTORE_PASSWORD is empty; " +
+                        "every release must keep the same signing key."
+                }
                 storeFile = file(storePath)
-                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                storePassword = storePasswordEnv
                 keyAlias = System.getenv("KEYSTORE_ALIAS") ?: "kimicode"
-                keyPassword = System.getenv("KEY_PASSWORD") ?: storePassword
+                keyPassword = System.getenv("KEY_PASSWORD") ?: storePasswordEnv
             }
         }
     }

@@ -16,6 +16,8 @@ import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
@@ -358,6 +360,7 @@ class MainActivity : Activity() {
         }
         shell.visibility = View.GONE
         webContainer.visibility = View.VISIBLE
+        applyImmersive(true)
     }
 
     /**
@@ -373,6 +376,40 @@ class MainActivity : Activity() {
         pageSettings.visibility = if (currentPage == R.id.pageSettings) View.VISIBLE else View.GONE
         pageData.visibility = if (currentPage == R.id.pageData) View.VISIBLE else View.GONE
         pageTerminal.visibility = if (currentPage == R.id.pageTerminal) View.VISIBLE else View.GONE
+        applyImmersive(false)
+    }
+
+    /**
+     * The workspace is meant to read like the desktop web UI shrunk to a phone.
+     * Keeping the status bar and the app's own title bar on screen would eat the
+     * top of the page, so the whole viewport belongs to the web UI while it is
+     * open. Swiping from the left edge brings the launcher back.
+     */
+    private fun applyImmersive(enabled: Boolean) {
+        val window = window
+        if (enabled) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                window.insetsController?.let {
+                    it.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                    it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = (
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        or View.SYSTEM_UI_FLAG_FULLSCREEN
+                        or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    )
+            }
+        } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                window.insetsController?.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+            } else {
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+            }
+        }
     }
 
     // ---------------------------------------------------------------- settings
@@ -870,6 +907,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (workspaceVisible) applyImmersive(true)
         render()
     }
 

@@ -76,7 +76,22 @@ jobs:
           set -euo pipefail
           if [ -n "${KEYSTORE_BASE64:-}" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/kimicode.jks"
-            echo "KEYSTORE_PATH=$RUNNER_TEMP/kimicode.jks" >> "$GITHUB_ENV"
+            # Gradle reads these in later steps, so they must outlive this one.
+            # Writing only KEYSTORE_PATH left storePassword null and the
+            # release build failed at :app:packageRelease.
+            {
+              echo "KEYSTORE_PATH=$RUNNER_TEMP/kimicode.jks"
+              echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+              echo "KEYSTORE_ALIAS=$KEYSTORE_ALIAS"
+              echo "KEY_PASSWORD=$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+            if keytool -list -keystore "$RUNNER_TEMP/kimicode.jks" \
+                -storepass "$KEYSTORE_PASSWORD" -alias "$KEYSTORE_ALIAS" > /dev/null 2>&1; then
+              echo "Signing key loaded; this release is signed with the stable key."
+            else
+              echo "::error::The restored keystore does not open with the configured alias/password."
+              exit 1
+            fi
             echo "signed=release-key" >> "$GITHUB_OUTPUT"
           else
             echo "No KEYSTORE_BASE64 secret; falling back to the debug key."
@@ -109,6 +124,11 @@ jobs:
         run: |
           mkdir -p output
           cp android/app/build/outputs/apk/release/app-release.apk output/Kimi-Code-Android.apk
+          # Keep the release title in step with the build instead of a literal
+          # that goes stale every time the version is bumped.
+          VERSION=$(grep -oP 'versionName = "\K[^"]+' android/app/build.gradle.kts)
+          echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "App version: $VERSION"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -134,7 +154,7 @@ jobs:
         if: github.ref == 'refs/heads/main'
         with:
           tag_name: rootfs-v1
-          name: "Kimi Code on Android v2.2.0 (运行环境已内置)"
+          name: "Kimi Code on Android v${{ env.APP_VERSION }} (运行环境已内置)"
           draft: false
           prerelease: false
           body: |
@@ -144,7 +164,7 @@ jobs:
             **整个 Linux 运行环境已经打进 APK 里，首次启动不需要下载任何东西。**
 
             ### 装了就能用
-            1. 安装 `Kimi-Code-Android.apk`（装之前先卸载旧版，签名可能不同）；
+            1. 安装 `Kimi-Code-Android.apk`，**直接覆盖安装即可**，不用卸载，数据和登录状态都会保留；
             2. 打开 App，等它解压内置环境（一次性，约 1 分钟）；
             3. 自动启动本地服务，并直接带 Token 打开工作台，**不会问你要 Token**。
 
@@ -155,12 +175,18 @@ jobs:
             - proot（免 Root 运行 Linux）
             - ripgrep
 
-            ### 这一版的新界面
-            - 底部四个标签页：**首页 / 插件 / 设置 / 终端**；
+            ### 界面
+            - 底部五个标签页：**首页 / 插件 / 设置 / 数据 / 终端**；
             - 首页显示运行状态、访问地址、LAN 开关、当前模型和工作区路径；
-            - 工作台里**从屏幕左边缘往右滑**即可返回，右下角那个悬浮按钮已经去掉；
-            - 设置页补齐了自动进入、边缘滑动返回、局域网访问、屏幕常亮；
+            - 工作台是**全屏覆盖层**，进入时状态栏一起收起，页面从屏幕最顶端开始，
+              底部标签栏不会压在工作台上；**从屏幕左边缘往右滑**即可返回；
+            - **数据页**支持一键备份、按文件恢复、导出到别的手机，设置和会话一并迁移；
             - 终端页可以在容器里直接执行命令。
+
+            ### 这一版修掉的问题
+            - **签名固定**：所有版本都用同一把密钥签名，以后更新直接覆盖安装，
+              不需要卸载，也不用担心丢数据（首次从更早的调试签名版本升级时仍需卸载一次）；
+            - 进工作台后顶部不再被遮挡。
 
             ### 能力
             - 前台服务常驻保活，切走应用不会掉；
