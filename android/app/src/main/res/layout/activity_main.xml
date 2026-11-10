@@ -518,11 +518,71 @@
                     android:layout_marginTop="8dp"
                     android:background="@drawable/bg_card"
                     android:orientation="vertical"
-                    android:padding="14dp">
+                    android:paddingLeft="14dp"
+                    android:paddingTop="4dp"
+                    android:paddingRight="14dp"
+                    android:paddingBottom="4dp">
+
+                    <LinearLayout
+                        android:id="@+id/modelList"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:paddingTop="8dp"
+                        android:paddingBottom="8dp" />
+
+                    <TextView
+                        android:id="@+id/modelListEmpty"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/model_list_empty"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/btnAddModel"
+                        android:layout_width="match_parent"
+                        android:layout_height="42dp"
+                        android:layout_marginBottom="12dp"
+                        android:background="@drawable/bg_chip_accent"
+                        android:gravity="center"
+                        android:text="@string/action_add_model"
+                        android:textColor="@color/accent"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="@string/model_hint_multi"
+                    android:textColor="@color/text_muted"
+                    android:textSize="11sp" />
+
+                <LinearLayout
+                    android:id="@+id/editorPanel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:background="@drawable/bg_card"
+                    android:orientation="vertical"
+                    android:padding="14dp"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/editorTitle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/action_add_model"
+                        android:textColor="@color/text_primary"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
 
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
                         android:text="@string/field_provider"
                         android:textColor="@color/text_primary"
                         android:textSize="12sp"
@@ -533,6 +593,25 @@
                         android:layout_width="match_parent"
                         android:layout_height="44dp"
                         android:layout_marginTop="4dp" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="@string/field_provider_name"
+                        android:textColor="@color/text_primary"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+
+                    <EditText
+                        android:id="@+id/editAlias"
+                        android:layout_width="match_parent"
+                        android:layout_height="44dp"
+                        android:hint="@string/hint_provider_name"
+                        android:importantForAutofill="no"
+                        android:inputType="textNoSuggestions"
+                        android:singleLine="true"
+                        android:textSize="13sp" />
 
                     <TextView
                         android:layout_width="match_parent"
@@ -568,7 +647,7 @@
                         android:layout_height="44dp"
                         android:hint="@string/hint_model"
                         android:importantForAutofill="no"
-                        android:inputType="text"
+                        android:inputType="textNoSuggestions"
                         android:singleLine="true"
                         android:textSize="13sp" />
 
@@ -610,26 +689,65 @@
                         android:singleLine="true"
                         android:textSize="13sp" />
 
-                    <Button
-                        android:id="@+id/btnSave"
+                    <LinearLayout
                         android:layout_width="match_parent"
-                        android:layout_height="46dp"
+                        android:layout_height="wrap_content"
                         android:layout_marginTop="14dp"
-                        android:background="@drawable/btn_primary"
-                        android:text="@string/action_save"
-                        android:textAllCaps="false"
-                        android:textColor="@color/white"
-                        android:textSize="14sp" />
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/btnCancelEdit"
+                            android:layout_width="0dp"
+                            android:layout_height="46dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/btn_secondary"
+                            android:text="@string/action_cancel"
+                            android:textAllCaps="false"
+                            android:textColor="@color/text_primary"
+                            android:textSize="14sp" />
+
+                        <Button
+                            android:id="@+id/btnConfirmEntry"
+                            android:layout_width="0dp"
+                            android:layout_height="46dp"
+                            android:layout_marginLeft="8dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/btn_primary"
+                            android:text="@string/action_save"
+                            android:textAllCaps="false"
+                            android:textColor="@color/white"
+                            android:textSize="14sp" />
+                    </LinearLayout>
 
                     <TextView
-                        android:id="@+id/saveHint"
+                        android:id="@+id/editorHint"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
-                        android:text="@string/settings_hint"
                         android:textColor="@color/text_secondary"
-                        android:textSize="11sp" />
+                        android:textSize="11sp"
+                        android:visibility="gone" />
                 </LinearLayout>
+
+                <Button
+                    android:id="@+id/btnSave"
+                    android:layout_width="match_parent"
+                    android:layout_height="46dp"
+                    android:layout_marginTop="14dp"
+                    android:background="@drawable/btn_primary"
+                    android:text="@string/action_save"
+                    android:textAllCaps="false"
+                    android:textColor="@color/white"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/saveHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/settings_hint"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="11sp" />
 
                 <TextView
                     android:layout_width="match_parent"

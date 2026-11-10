@@ -11,8 +11,8 @@ android {
         applicationId = "ai.kimi.code.app"
         minSdk = 26
         targetSdk = 28
-        versionCode = 8
-        versionName = "2.5.0"
+        versionCode = 9
+        versionName = "2.6.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

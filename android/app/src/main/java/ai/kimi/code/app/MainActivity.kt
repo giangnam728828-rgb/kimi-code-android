@@ -545,7 +545,13 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- settings
 
+    private lateinit var modelList: LinearLayout
+    private lateinit var modelListEmpty: TextView
+    private lateinit var editorPanel: View
+    private lateinit var editorTitle: TextView
+    private lateinit var editorHint: TextView
     private lateinit var spinnerProvider: Spinner
+    private lateinit var editAlias: EditText
     private lateinit var editBaseUrl: EditText
     private lateinit var editApiKey: EditText
     private lateinit var editModel: EditText
@@ -555,10 +561,18 @@ class MainActivity : Activity() {
     private lateinit var checkSwipeBack: CheckBox
     private lateinit var checkLan: CheckBox
     private lateinit var checkKeepAwake: CheckBox
-    private var selectedProvider: String = "kimi"
+
+    /** Index of the entry being edited, or null while adding a new one. */
+    private var editingIndex: Int? = null
 
     private fun setupSettingsPage() {
+        modelList = findViewById(R.id.modelList)
+        modelListEmpty = findViewById(R.id.modelListEmpty)
+        editorPanel = findViewById(R.id.editorPanel)
+        editorTitle = findViewById(R.id.editorTitle)
+        editorHint = findViewById(R.id.editorHint)
         spinnerProvider = findViewById(R.id.spinnerProvider)
+        editAlias = findViewById(R.id.editAlias)
         editBaseUrl = findViewById(R.id.editBaseUrl)
         editApiKey = findViewById(R.id.editApiKey)
         editModel = findViewById(R.id.editModel)
@@ -576,12 +590,12 @@ class MainActivity : Activity() {
         )
         spinnerProvider.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                // While editing an existing entry the picker only mirrors that
+                // entry; autofilling would wipe what the user already typed.
+                val index = editingIndex
+                if (index != null || position !in Prefs.PRESETS.indices) return
                 val preset = Prefs.PRESETS[position]
-                if (preset.id == selectedProvider) return
-                selectedProvider = preset.id
-                editBaseUrl.setText(preset.baseUrl)
-                editModel.setText(preset.model)
-                editContext.setText(preset.contextSize.toString())
+                fillEditor(preset, suggestAlias(preset))
             }
 
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
@@ -598,51 +612,217 @@ class MainActivity : Activity() {
             render()
         }
 
+        findViewById<View>(R.id.btnAddModel).setOnClickListener { openEditor(null) }
+        findViewById<Button>(R.id.btnConfirmEntry).setOnClickListener { confirmEntry() }
+        findViewById<Button>(R.id.btnCancelEdit).setOnClickListener { closeEditor() }
         findViewById<Button>(R.id.btnSave).setOnClickListener { saveSettings() }
         findViewById<TextView>(R.id.textVersion).text =
             getString(R.string.about_version, appVersionName())
     }
 
     private fun loadSettingsIntoUi() {
-        val settings = Prefs.load(this)
-        selectedProvider = settings.provider
-        val index = Prefs.PRESETS.indexOfFirst { it.id == settings.provider }.coerceAtLeast(0)
-        spinnerProvider.setSelection(index, false)
-        editBaseUrl.setText(settings.baseUrl)
-        editApiKey.setText(settings.apiKey)
-        editModel.setText(settings.model)
-        editContext.setText(settings.contextSize.toString())
+        val entries = Prefs.load(this)
+        val editing = editingIndex
+        if (editing != null && editing >= entries.size) closeEditor()
+        renderModelList()
         checkAutoEnter.isChecked = Prefs.autoEnter(this)
         checkSwipeBack.isChecked = Prefs.swipeBack(this)
         checkLan.isChecked = Prefs.lan(this)
         checkKeepAwake.isChecked = Prefs.keepAwake(this)
+        saveHint.setTextColor(getColor(R.color.text_secondary))
+        saveHint.text = getString(R.string.settings_hint)
+    }
+
+    private fun renderModelList() {
+        val entries = Prefs.load(this)
+        val active = Prefs.activeEntry(this)
+        modelList.removeAllViews()
+        modelListEmpty.visibility = if (entries.isEmpty()) View.VISIBLE else View.GONE
+        entries.forEachIndexed { index, entry ->
+            val isActive = entry.modelAlias == active?.modelAlias
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(dp(13), dp(12), dp(13), dp(12))
+                setBackgroundResource(R.drawable.bg_card)
+                setOnClickListener { openEditor(index) }
+            }
+            val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            column.addView(
+                textLabel(entry.model.ifBlank { entry.alias }, getColor(R.color.text_primary), 13f).apply {
+                    setTypeface(null, android.graphics.Typeface.BOLD)
+                },
+            )
+            column.addView(
+                textLabel(
+                    buildString {
+                        append(entry.preset.label)
+                        append(" · ")
+                        append(entry.type)
+                        if (isActive) append(" · ").append(getString(R.string.model_entry_default))
+                    },
+                    getColor(R.color.text_muted),
+                    11f,
+                ),
+            )
+            row.addView(column, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+            if (!isActive) {
+                row.addView(
+                    actionButton(getString(R.string.action_set_default)) {
+                        Prefs.setActiveEntry(this@MainActivity, index)
+                        renderModelList()
+                        render()
+                        toast(getString(R.string.model_default_pending))
+                    },
+                )
+            }
+            row.addView(
+                actionButton(getString(R.string.action_delete)) { deleteEntry(index) },
+            )
+            modelList.addView(
+                row,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = dp(8) },
+            )
+        }
+    }
+
+    private fun actionButton(label: String, onClick: () -> Unit): TextView =
+        TextView(this).apply {
+            text = label
+            setTextColor(getColor(R.color.accent))
+            textSize = 12f
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            setOnClickListener { onClick() }
+        }
+
+    /** Alias that does not collide with an already configured entry. */
+    private fun suggestAlias(preset: Prefs.Preset): String {
+        val entries = Prefs.load(this)
+        if (entries.none { it.alias == preset.id }) return preset.id
+        var suffix = 2
+        while (entries.any { it.alias == "$preset.id-$suffix" }) suffix++
+        return "$preset.id-$suffix"
+    }
+
+    private fun fillEditor(preset: Prefs.Preset, alias: String) {
+        editAlias.setText(alias)
+        editBaseUrl.setText(preset.baseUrl)
+        editModel.setText(preset.model)
+        editContext.setText(preset.contextSize.toString())
+        editApiKey.setText("")
+    }
+
+    private fun openEditor(index: Int?) {
+        editingIndex = index
+        editorPanel.visibility = View.VISIBLE
+        editorHint.visibility = View.GONE
+        if (index == null) {
+            editorTitle.text = getString(R.string.action_add_model)
+            val position = spinnerProvider.selectedItemPosition.coerceIn(0, Prefs.PRESETS.lastIndex)
+            fillEditor(Prefs.PRESETS[position], suggestAlias(Prefs.PRESETS[position]))
+            return
+        }
+        val entry = Prefs.load(this).getOrNull(index)
+        if (entry == null) {
+            closeEditor()
+            return
+        }
+        editorTitle.text = entry.alias
+        editAlias.setText(entry.alias)
+        editBaseUrl.setText(entry.baseUrl.ifBlank { entry.preset.baseUrl })
+        editApiKey.setText(entry.apiKey)
+        editModel.setText(entry.model)
+        editContext.setText(entry.contextSize.toString())
+        val position = Prefs.PRESETS.indexOfFirst { it.id == entry.presetId }
+        spinnerProvider.setSelection(position.coerceAtLeast(0), false)
+    }
+
+    private fun closeEditor() {
+        editingIndex = null
+        editorPanel.visibility = View.GONE
+        editorHint.visibility = View.GONE
+    }
+
+    private fun confirmEntry() {
+        val alias = editAlias.text.toString().trim()
+        val apiKey = editApiKey.text.toString().trim()
+        val baseUrl = editBaseUrl.text.toString().trim()
+        val model = editModel.text.toString().trim()
+        val contextSize = editContext.text.toString().trim().toIntOrNull() ?: 131072
+
+        editorHint.visibility = View.VISIBLE
+        if (alias.isEmpty() || model.isEmpty() || apiKey.isEmpty()) {
+            editorHint.setTextColor(getColor(R.color.warn))
+            editorHint.text = getString(R.string.save_need_key_new)
+            return
+        }
+
+        val preset = Prefs.PRESETS[spinnerProvider.selectedItemPosition.coerceIn(0, Prefs.PRESETS.lastIndex)]
+        val entries = Prefs.load(this).toMutableList()
+        val entry = Prefs.Entry(
+            presetId = preset.id,
+            alias = alias,
+            apiKey = apiKey,
+            baseUrl = baseUrl,
+            model = model,
+            contextSize = contextSize,
+        )
+        val index = editingIndex
+        if (index == null) entries.add(entry) else entries[index] = entry
+        Prefs.save(this, entries)
+        renderModelList()
+        closeEditor()
+        toast(getString(R.string.model_added))
+    }
+
+    private fun deleteEntry(index: Int) {
+        val entries = Prefs.load(this).toMutableList()
+        if (index !in entries.indices) return
+        entries.removeAt(index)
+        Prefs.save(this, entries)
+        val activeIndex = entries.indexOfFirst { it.modelAlias == Prefs.activeEntry(this)?.modelAlias }
+        Prefs.setActiveEntry(this, activeIndex.coerceIn(0, maxOf(0, entries.size - 1)))
+
+        val editing = editingIndex
+        if (editing != null) {
+            editingIndex = when {
+                editing == index -> null
+                editing > index -> editing - 1
+                else -> editing
+            }
+            if (editingIndex == null) closeEditor()
+        }
+        renderModelList()
+        render()
     }
 
     private fun saveSettings() {
-        val settings = Prefs.ModelSettings(
-            provider = selectedProvider,
-            baseUrl = editBaseUrl.text.toString().trim(),
-            apiKey = editApiKey.text.toString().trim(),
-            model = editModel.text.toString().trim(),
-            contextSize = editContext.text.toString().trim().toIntOrNull()
-                ?: Prefs.preset(selectedProvider).contextSize,
-        )
-        Prefs.save(this, settings)
-        render()
-
-        if (!settings.isConfigured) {
+        val entries = Prefs.load(this)
+        val usable = entries.filter { it.isConfigured }
+        saveHint.setTextColor(getColor(R.color.text_secondary))
+        saveHint.text = getString(R.string.settings_hint)
+        if (usable.isEmpty()) {
             saveHint.setTextColor(getColor(R.color.warn))
-            saveHint.text = getString(R.string.save_need_key)
+            saveHint.text = getString(R.string.save_need_entries)
             return
         }
-        val written = runCatching { ConfigWriter.write(this, settings) }
-        if (written.isSuccess) {
-            saveHint.setTextColor(getColor(R.color.ok))
-            saveHint.text = getString(R.string.save_ok)
-        } else {
+        val written = runCatching { ConfigWriter.write(this, entries, Prefs.activeEntry(this)) }
+        if (written.isFailure) {
             saveHint.setTextColor(getColor(R.color.danger))
             saveHint.text = "保存失败：${written.exceptionOrNull()?.message}"
+            return
         }
+        saveHint.setTextColor(getColor(R.color.ok))
+        saveHint.text = getString(R.string.save_apply)
+        if (Paths.isRuntimeInstalled(this)) {
+            loadedUrl = null
+            RuntimeService.restart(this)
+        }
+        render()
     }
 
     private fun applyKeepAwake() {
@@ -1005,9 +1185,9 @@ class MainActivity : Activity() {
         valueLanToggle.text = getString(if (lan) R.string.action_disable else R.string.action_enable)
         valueLanToggle.setTextColor(getColor(if (lan) R.color.danger else R.color.accent))
 
-        val settings = Prefs.load(this)
-        valueModel.text = if (settings.isConfigured) {
-            "${settings.model} · ${Prefs.preset(settings.provider).label}"
+        val active = Prefs.activeEntry(this)
+        valueModel.text = if (active != null && active.isConfigured) {
+            "${active.model} · ${active.preset.label}"
         } else {
             getString(R.string.value_model_empty)
         }

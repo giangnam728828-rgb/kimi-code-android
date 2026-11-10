@@ -25,7 +25,8 @@
 
 1. 在 [Releases](https://github.com/giangnam728828-rgb/kimi-code-android/releases) 下载 `Kimi-Code-Android.apk` 并安装；
 2. 打开 App，首次会解压内置的运行环境（一次性，约 1 分钟），之后完全离线；
-3. 右上角「设置」里填你自己的 API Key（Kimi / DeepSeek / OpenAI / Claude 任选）；
+3. 底部「设置」页里添加模型：选择服务商、填你自己的 API Key，可以同时加多个
+   （Kimi / DeepSeek / OpenAI / Claude / OpenRouter / 任意 OpenAI 兼容接口），保存后自动重启生效；
 4. 回到主界面点「进入工作台」—— **不会再问你 Token**。
 
 之后的每次打开：服务自动启动，工作台自动打开。
@@ -38,8 +39,10 @@
 - **崩溃自愈**：服务进程退出后自动重启，不需要手动干预。
 - **免 Token 进入**：App 启动服务后读取 `server.token`，直接用 `#token=` 打开工作台。
 - **外部存储**：申请了读写权限，`/sdcard` 直接挂进 Linux 环境，工作区可以放你的真实项目。
-- **模型切换**：设置页写 `config.toml`，改完重启运行时生效。
-- **四个标签页**：首页（状态 / 地址 / 模型 / 工作区）、插件、设置、终端。
+- **多模型并存**：设置页可同时配置多个服务商（各自独立的 API Key），列表里一键切换默认模型，
+  配置写进 `config.toml` 后重启运行时生效，工作台里也能随时切换。
+- **数据备份**：数据页支持备份 / 恢复会话、配置和工作区，可导出到别的手机迁移。
+- **五个标签页**：首页（状态 / 地址 / 模型 / 工作区 / 日志）、插件、设置、数据、终端。
 - **滑动返回**：工作台里从屏幕左边缘往右滑回到启动页，没有悬浮球遮挡界面。
 
 ---
@@ -50,12 +53,12 @@
 android/                         原生 Android 工程（Kotlin）
   app/src/main/assets/proot/     proot 二进制与依赖库（arm64）
   app/src/main/java/.../
-    MainActivity.kt              四个标签页 + 工作台 WebView + 终端
+    MainActivity.kt              五个标签页 + 全屏工作台 WebView + 终端
     RuntimeService.kt            前台服务：安装、启动、保活、看护
-    Installer.kt                 下载 rootfs、释放 proot
-    TarExtractor.kt              流式 tar.gz 解压器（自带，不依赖外部命令）
+    Installer.kt                 解压内置 rootfs、释放 proot
+    TarExtractor.kt              流式 tar 解压器（gzip 自动嗅探，不依赖外部命令）
     ProotRuntime.kt              组装并启动 proot 命令行
-    ConfigWriter.kt              写 ~/.kimi-code/config.toml
+    ConfigWriter.kt              写 ~/.kimi-code/config.toml（多服务商并存）
 runtime/entrypoint.sh            容器启动脚本（CI 会把它打进 rootfs）
 runtime/build-rootfs.sh          重建 rootfs 归档（需 aarch64 主机）
 .github/workflows/build-apk.yml  CI：测试 + 编译 + 发布
@@ -70,7 +73,7 @@ runtime/build-rootfs.sh          重建 rootfs 归档（需 aarch64 主机）
      │
      ▼
 RuntimeService（前台服务）
-     │  首次：下载 rootfs.tar.gz → TarExtractor 解压到 filesDir/rootfs
+     │  首次：解压 APK 内置的 rootfs 到 filesDir/rootfs
      │  之后：直接复用
      ▼
 proot -0 -r <filesDir>/rootfs … /opt/kimi/entrypoint.sh
@@ -109,6 +112,7 @@ gradle :app:testReleaseUnitTest -Dkimi.rootfs=/path/to/rootfs-arm64.tar.gz
 ## 已知限制
 
 - **只支持 arm64**，Android 10 及以上；
-- 首次安装需要联网下载运行环境；
 - 运行时占用约 **250 MB** 磁盘（在 App 私有目录）；
-- APK 目前用 debug 签名发布，不同签名版本之间不能覆盖安装，升级时请先卸载旧版。
+- APK 约 **240 MB** —— 整套运行环境内置的代价，换来首次启动不依赖网络；
+- 所有版本使用同一把固定密钥签名，更新直接覆盖安装、数据保留；
+  只有从更早的 debug 签名版本升级过来时才需要先卸载一次。
