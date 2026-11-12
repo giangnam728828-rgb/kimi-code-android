@@ -61,8 +61,9 @@
     <string name="hint_context">例如 131072</string>
     <string name="hint_provider_name">例如 deepseek、openrouter、my-gateway</string>
     <string name="action_add_model">添加模型</string>
-    <string name="action_manage_provider_models">管理同一服务商的多个模型 / API</string>
-    <string name="model_hint_web_switch">配好后在工作台输入框旁的模型下拉 /「更多模型」里直接切换，不用保存、不用重启</string>
+    <string name="action_manage_provider_models">管理分组内的多个模型 / API</string>
+    <string name="model_hint_web_switch">配好后在工作台「更多模型」里按分组隔开显示；切换模型不用保存、不用重启</string>
+    <string name="model_group_hint">每个分组可以添加多个模型，不同分组在工作台里会分开显示</string>
     <string name="action_edit">编辑</string>
     <string name="action_cancel">取消</string>
     <string name="action_delete">删除</string>
@@ -86,13 +87,30 @@
     <string name="model_status_registering">正在登记全部模型…</string>
     <string name="model_registered_all">已登记 %1$d 个模型，重启后在网页下拉里直接切换</string>
 
-    <string name="model_pick_placeholder">点右边「选择」挑一个模型</string>
+    <string name="model_multi_title">选择要添加的模型</string>
+    <string name="model_multi_hint">以下是模型提供商的可用模型，勾选要添加的模型。</string>
+    <string name="model_multi_search_hint">搜索模型</string>
+    <string name="model_multi_select_all">全选</string>
+    <string name="model_multi_clear">清空</string>
+    <string name="model_multi_refresh">刷新列表</string>
+    <string name="model_multi_manual">手动输入</string>
+    <string name="model_multi_manual_add">加入</string>
+    <string name="model_multi_manual_hint">粘贴服务商文档里的 model id（区分大小写）</string>
+    <string name="model_multi_add">添加所选</string>
+    <string name="model_multi_none">请先勾选至少一个模型</string>
+    <string name="model_multi_loading">正在从接口获取模型列表…</string>
+    <string name="model_multi_cached">已缓存 %1$d 个模型 · 点「刷新列表」重新获取</string>
+    <string name="model_multi_selected">已勾选 %1$d 个 / 共 %2$d 个模型</string>
+    <string name="model_multi_search_result">搜索结果  (%1$d)</string>
+    <string name="model_multi_already">已添加 · 无需重复勾选</string>
+
+    <string name="model_pick_placeholder">点右边「选择」可一次勾选多个模型</string>
     <string name="model_pick_sub">从接口自动拉取，不用手填</string>
     <string name="model_pick_none">还没有选模型</string>
-    <string name="action_pick_model">选择</string>
+    <string name="action_pick_model">选择模型（可多选）</string>
     <string name="action_fetch_models">自动获取模型</string>
     <string name="action_probe_model">验证模型可用</string>
-    <string name="model_pick_hint">填好 API Key 后会自动获取；列表里的名称才是网关真正接受的 id</string>
+    <string name="model_pick_hint">填好 API Key 后会自动获取；勾选多个模型可一次加入同一分组</string>
     <string name="action_advanced">高级选项（名称 / 接口地址 / 上下文 / 思考强度）</string>
     <string name="action_advanced_hide">收起高级选项</string>
     <string name="check_manual_model">手动输入模型名</string>

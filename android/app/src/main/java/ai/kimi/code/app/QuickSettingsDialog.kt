@@ -122,66 +122,58 @@ object QuickSettingsDialog {
             toast("$message · 后台生效，页面不刷新")
         }
 
-        /**
-         * One row per model: registered ones switch the default, unregistered
-         * ones are added and switched in the same write. Kotlin local functions
-         * cannot be forward-referenced, so the click handling lives inline.
-         */
+        /** 分组标题 + 组间留白：不同分组之间明确隔开，不再平铺成一列。 */
+        fun groupHeader(title: String): TextView = TextView(activity).apply {
+            text = title
+            textSize = 11f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(activity.getColor(R.color.text_secondary))
+            setBackgroundColor(Color.parseColor("#F2F3F5"))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+        }
+
+        fun groupSeparator(): View = View(activity).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(10))
+        }
+
         fun renderModels() {
             modelRows.removeAllViews()
             val entries = Prefs.load(activity)
-            val index = activeIndex()
-            if (index < 0) {
+            if (entries.isEmpty()) {
                 modelRows.addView(label("还没有配置模型，请先到「设置」页添加"))
                 status.text = "未配置"
                 return
             }
-            val entry = entries[index]
-            val registered = entry.registeredModels
-            val merged = (registered + catalogIds)
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-                .distinctBy { it.lowercase() }
-            merged.forEach { id ->
-                val isCurrent = id.equals(entry.model, ignoreCase = true)
-                val isRegistered = registered.any { it.equals(id, ignoreCase = true) }
-                modelRows.addView(TextView(activity).apply {
-                    text = when {
-                        isCurrent -> "✓  $id   （当前）"
-                        isRegistered -> "     $id"
-                        else -> "＋ $id   （点一下加入）"
-                    }
-                    textSize = 14f
-                    setTextColor(
-                        activity.getColor(
-                            when {
-                                isCurrent -> R.color.accent
-                                isRegistered -> R.color.text_primary
-                                else -> R.color.text_muted
-                            },
-                        ),
-                    )
-                    setPadding(dp(8), dp(11), dp(8), dp(11))
-                    setOnClickListener {
-                        val list = Prefs.load(activity).toMutableList()
-                        val at = activeIndex()
-                        if (at < 0) return@setOnClickListener
-                        val cur = list[at]
-                        list[at] = if (isRegistered) {
-                            cur.copy(model = id)
-                        } else {
-                            cur.copy(model = id, models = (cur.models + id).distinct())
-                        }
-                        applyChange(
-                            list, at,
-                            if (isRegistered) "已切到 $id" else "已登记并切到 $id",
+            val activeIndex = activeIndex()
+            entries.forEachIndexed { groupIndex, entry ->
+                if (groupIndex > 0) modelRows.addView(groupSeparator())
+                val ids = entry.registeredModels
+                modelRows.addView(groupHeader("${entry.alias}  (${ids.size} 个模型)"))
+                ids.forEach { id ->
+                    val isCurrent = id.equals(entry.model, ignoreCase = true)
+                    modelRows.addView(TextView(activity).apply {
+                        text = if (isCurrent) "✓  $id   （当前）" else "     $id"
+                        textSize = 14f
+                        setTextColor(
+                            activity.getColor(if (isCurrent) R.color.accent else R.color.text_primary),
                         )
-                        renderModels()
-                    }
-                })
+                        setPadding(dp(8), dp(11), dp(8), dp(11))
+                        setOnClickListener {
+                            val list = entries.toMutableList()
+                            list[groupIndex] = list[groupIndex].copy(model = id)
+                            applyChange(list, groupIndex, "已切到 $id")
+                            renderModels()
+                        }
+                    })
+                }
+                modelRows.addView(divider(), LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 1,
+                ))
             }
-            status.text = "接入名「${entry.alias}」· 这个接口共 ${merged.size} 个模型，" +
-                "已登记 ${registered.size} 个；点一下即切换"
+            status.text = "共 ${entries.size} 个分组 · " +
+                "${entries.sumOf { it.registeredModels.size }} 个模型；工作台「更多模型」里按分组隔开显示" +
+                if (activeIndex >= 0) "（当前默认分组：${entries[activeIndex].alias}）" else ""
         }
 
         fun syncInputs() {
@@ -247,11 +239,62 @@ object QuickSettingsDialog {
             onRegisterAll()
         }
 
+        /** 2.15.0: tick several models at once and keep them in the same group. */
+        fun addModel() {
+            val entries = Prefs.load(activity).toMutableList()
+            val index = activeIndex()
+            if (index < 0) {
+                toast("请先到「设置」页添加一个模型")
+                return
+            }
+            val url = baseUrlEdit.text.toString().trim().ifBlank { entries[index].preset.baseUrl }
+            val key = apiKeyEdit.text.toString().trim()
+            if (url.isBlank() || key.isBlank()) {
+                toast("先填好 API 地址和 Key")
+                return
+            }
+            val type = entries[index].type
+            val current = entries[index]
+            // Persist the edited endpoint first so the picker probes the right
+            // gateway and nothing typed here is lost when the dialog reopens.
+            entries[index] = current.copy(baseUrl = url, apiKey = key)
+            Prefs.save(activity, entries)
+            dialog?.dismiss()
+            // 一次可勾选多个模型：全部登记进当前分组，工作台下拉里同组显示。
+            ModelMultiPickerDialog.show(
+                activity = activity,
+                baseUrl = url,
+                apiKey = key,
+                type = type,
+                already = current.registeredModels,
+                cached = emptyList(),
+                onCache = {},
+                onPicked = { picked ->
+                    val list = Prefs.load(activity).toMutableList()
+                    val i = activeIndex()
+                    if (i >= 0) {
+                        val e = list[i]
+                        val (defaultModel, rest) = ModelGroup.mergePicked(
+                            e.model, e.models, picked.map { it.id },
+                        )
+                        list[i] = e.copy(
+                            model = defaultModel,
+                            models = rest,
+                            baseUrl = url,
+                            apiKey = key,
+                        )
+                        applyChange(list, i, "已加入 ${picked.size} 个模型到分组「${e.alias}」")
+                    }
+                    show(activity, onRefresh, onChanged, onRegisterAll)
+                },
+            )
+        }
+
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(16), dp(20), dp(8))
         }
-        root.addView(label("配置这个接入 · 同一服务商的多个模型", bold = true).apply { textSize = 15f })
+        root.addView(label("模型分组 · 每个分组都能添加多个模型", bold = true).apply { textSize = 15f })
         root.addView(status)
 
         val modelScroll = ScrollView(activity)
@@ -268,7 +311,13 @@ object QuickSettingsDialog {
 
         val actions = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
         actions.addView(
-            chip("重新读取模型列表") { loadCatalog() },
+            chip("＋ 批量添加模型") { addModel() },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = dp(8)
+            },
+        )
+        actions.addView(
+            chip("刷新列表") { loadCatalog() },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                 marginEnd = dp(8)
             },

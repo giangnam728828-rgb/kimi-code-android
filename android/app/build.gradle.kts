@@ -20,9 +20,11 @@ android {
         // picked model. The web dropdown is built from `[models.*]` sections,
         // so one section per model is what makes every model of the same key
         // switchable without another save/restart.
-        // Must stay strictly above 2.13.0 / 26 to overwrite the installed build.
-        versionCode = 27
-        versionName = "2.14.0"
+        // 2.15.0: keep every group in its own providers.<alias> section and
+        // allow picking several models for one group at once.
+        // Must stay strictly above 2.14.0 / 27 to overwrite the installed build.
+        versionCode = 28
+        versionName = "2.15.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
