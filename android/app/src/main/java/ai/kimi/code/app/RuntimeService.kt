@@ -16,8 +16,10 @@ import android.os.IBinder
  *
  * Restarts are the delicate part. The WebView keeps login state and session
  * lists in localStorage, scoped to the `host:port` origin, so a restart must
- * reuse the exact same port. A [generation] counter also makes sure a stale
- * worker can never spawn a second server or kill the fresh one.
+ * reuse the exact same port — see [RestartPolicy]. A [generation] counter also
+ * makes sure a stale worker can never spawn a second server or kill the fresh
+ * one. All stop/restart waits run on background threads: onStartCommand runs on
+ * the main thread and blocking it for 6+ seconds froze the whole UI.
  */
 class RuntimeService : Service() {
 
@@ -28,8 +30,8 @@ class RuntimeService : Service() {
 
         private const val CHANNEL_ID = "kimi_runtime"
         private const val NOTIFICATION_ID = 42
-        private const val PORT_RELEASE_TIMEOUT_MS = 10_000L
-        private const val STOP_TIMEOUT_MS = 6_000L
+        private const val PORT_RELEASE_TIMEOUT_MS = 3_000L
+        private const val STOP_TIMEOUT_MS = 2_000L
 
         fun start(context: Context) {
             val intent = Intent(context, RuntimeService::class.java).setAction(ACTION_START)
@@ -49,7 +51,7 @@ class RuntimeService : Service() {
             // Flip the phase synchronously: startService delivers the intent
             // asynchronously, and without this the UI still sees READY and can
             // open the workspace against the process that is about to die.
-            Runtime.update(Runtime.Phase.STARTING, "正在重启本地服务", "", -1)
+            Runtime.update(Runtime.Phase.STARTING, "正在重启本地服务", "正在停止旧进程…", -1)
             val intent = Intent(context, RuntimeService::class.java).setAction(ACTION_RESTART)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -75,25 +77,33 @@ class RuntimeService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                generation++
+                val epoch = ++generation
                 wantStop = true
-                ProotRuntime.stopAndWait(STOP_TIMEOUT_MS)
-                worker?.let { runCatching { it.interrupt(); it.join(2000) } }
-                Runtime.update(Runtime.Phase.STOPPED, "已停止", "点击启动重新运行")
-                stopForegroundCompat()
-                stopSelf()
+                Runtime.update(Runtime.Phase.STOPPED, "正在停止", "")
+                // Never block the main thread while the old process dies.
+                Thread({
+                    ProotRuntime.stopAndWait(STOP_TIMEOUT_MS)
+                    worker?.let { runCatching { it.interrupt(); it.join(1000) } }
+                    if (epoch == generation) {
+                        Runtime.update(Runtime.Phase.STOPPED, "已停止", "点击启动重新运行")
+                        stopForegroundCompat()
+                        stopSelf()
+                    }
+                }, "kimi-stop").apply { isDaemon = true }.start()
                 return START_NOT_STICKY
             }
             ACTION_RESTART -> {
-                generation++
+                val epoch = ++generation
                 wantStop = true
-                // Wait for the old process to actually die BEFORE probing the
-                // port. The previous implementation only called destroy() and
-                // reset wantStop immediately, so the dying server still held
-                // 58630 and pickPort() silently moved the workspace to 58631.
-                ProotRuntime.stopAndWait(STOP_TIMEOUT_MS)
-                worker?.let { runCatching { it.interrupt(); it.join(2000) } }
-                startWorker()
+                Runtime.update(Runtime.Phase.STARTING, "正在重启本地服务", "正在停止旧进程…", -1)
+                Thread({
+                    // Kill the whole proot process tree so the listening socket
+                    // is released; then wait for the worker to exit before
+                    // starting a fresh one on the SAME port.
+                    ProotRuntime.stopAndWait(STOP_TIMEOUT_MS)
+                    worker?.let { runCatching { it.interrupt(); it.join(1000) } }
+                    if (epoch == generation) startWorker(epoch)
+                }, "kimi-restart").apply { isDaemon = true }.start()
                 return START_STICKY
             }
             else -> Unit
@@ -103,7 +113,9 @@ class RuntimeService : Service() {
         return START_STICKY
     }
 
-    private fun startWorker() {
+    private fun startWorker(expectedEpoch: Long = generation) {
+        // A stop may have landed while the restart thread was waiting.
+        if (expectedEpoch != generation) return
         wantStop = false
         val epoch = generation
         worker = Thread({ runLoop(epoch) }, "kimi-runtime").apply {
@@ -192,33 +204,28 @@ class RuntimeService : Service() {
     }
 
     /**
-     * Reuse the port from the previous run so the WebView origin never changes.
-     * If it is still held (usually the process we just stopped), wait for it to
-     * be released instead of hopping to the next port.
+     * The pinned port is mandatory. Moving to a new port changes the WebView
+     * origin and makes localStorage (login + chats) look empty. A dying proot
+     * child may still hold the socket briefly, so we wait for it to clear
+     * instead of ever hopping to another port.
      */
     private fun pickPort(): Int {
         val pinned = Prefs.fixedPort(this)
-        if (pinned in 1024..65535) {
-            if (waitForPortFree(pinned, PORT_RELEASE_TIMEOUT_MS)) return pinned
-            Runtime.log("端口 $pinned 仍被占用，尝试寻找可用端口")
+        val chosen = RestartPolicy.portToUse(pinned, Paths.DEFAULT_PORT) { candidate ->
+            !ProotRuntime.isPortOpen(candidate)
         }
-        var candidate = Paths.DEFAULT_PORT
-        repeat(20) {
-            if (!ProotRuntime.isPortOpen(candidate)) {
-                Prefs.setFixedPort(this, candidate)
-                return candidate
-            }
-            candidate++
+        if (chosen != pinned) Prefs.setFixedPort(this, chosen)
+        if (!waitForPortFree(chosen, PORT_RELEASE_TIMEOUT_MS)) {
+            Runtime.log("端口 $chosen 仍被占用，保持同一端口重试（换端口会清空聊天记录）")
         }
-        Prefs.setFixedPort(this, Paths.DEFAULT_PORT)
-        return Paths.DEFAULT_PORT
+        return chosen
     }
 
     private fun waitForPortFree(port: Int, timeoutMs: Long): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             if (!ProotRuntime.isPortOpen(port)) return true
-            runCatching { Thread.sleep(200) }
+            runCatching { Thread.sleep(100) }
         }
         return !ProotRuntime.isPortOpen(port)
     }
@@ -274,7 +281,9 @@ class RuntimeService : Service() {
     override fun onDestroy() {
         generation++
         wantStop = true
-        ProotRuntime.stopAndWait(STOP_TIMEOUT_MS)
+        // onDestroy runs on the main thread: use the non-blocking stop (it now
+        // kills the whole process tree) instead of a synchronous wait.
+        ProotRuntime.stop()
         super.onDestroy()
     }
 

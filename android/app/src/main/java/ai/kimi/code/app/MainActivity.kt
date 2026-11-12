@@ -91,6 +91,8 @@ class MainActivity : Activity() {
 
     private var loadedUrl: String? = null
     private var workspaceVisible = false
+    /** True right after WebView.restoreState: an extra loadUrl would discard the page (and its DOM). */
+    private var webViewRestored = false
     private var currentPage = R.id.pageHome
     private var lastExternalUrl: String? = null
     private var lastExternalAt = 0L
@@ -108,6 +110,15 @@ class MainActivity : Activity() {
 
     private companion object {
         const val REQUEST_PICK_BACKUP = 3001
+        const val KEY_WEB_STATE = "web_view_state"
+
+        /**
+         * WebView state must also survive a user-initiated finish() + relaunch,
+         * where onSaveInstanceState is not delivered. Process-local by design:
+         * if the process itself dies, localStorage on the pinned origin is the
+         * fallback.
+         */
+        var savedWebViewState: Bundle? = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -115,6 +126,7 @@ class MainActivity : Activity() {
         setContentView(R.layout.activity_main)
         bindViews()
         setupWebView()
+        restoreWebViewState(savedInstanceState)
         setupNavigation()
         setupSettingsPage()
         setupTerminal()
@@ -170,12 +182,12 @@ class MainActivity : Activity() {
         btnPrimary.setOnClickListener { onPrimaryAction() }
         btnRestart.setOnClickListener {
             Runtime.log("用户请求重启")
-            loadedUrl = null
+            // The port is pinned, so the URL survives a restart. Do not clear
+            // loadedUrl: a forced reload used to drop the last reply.
             RuntimeService.restart(this)
         }
         btnStop.setOnClickListener {
             Runtime.log("用户请求停止")
-            loadedUrl = null
             RuntimeService.stop(this)
         }
         findViewById<View>(R.id.rowAddress).setOnClickListener { copyAddress() }
@@ -324,6 +336,31 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- workspace
 
+    /**
+     * Restores the WebView's back/forward list after an Activity recreation.
+     * Without this, leaving the workspace and coming back rebuilt the DOM and
+     * any reply the web UI had not yet flushed to a session file disappeared.
+     */
+    private fun restoreWebViewState(savedInstanceState: Bundle?) {
+        val state = savedInstanceState?.getBundle(KEY_WEB_STATE) ?: savedWebViewState ?: return
+        val list = runCatching { webView.restoreState(state) }.getOrNull() ?: return
+        if (list.size == 0) return
+        webViewRestored = true
+        // Keep the page's own URL (hash route included); RestartPolicy compares
+        // origins, so a different hash will not trigger a redundant reload.
+        loadedUrl = runCatching { list.currentItem?.url }.getOrNull()
+    }
+
+    /** Saves WebView state both into the instance bundle and a process-local slot. */
+    private fun captureWebViewState(): Bundle? {
+        if (!::webView.isInitialized) return null
+        val bundle = Bundle()
+        val list = runCatching { webView.saveState(bundle) }.getOrNull() ?: return null
+        if (list.size == 0) return null
+        savedWebViewState = bundle
+        return bundle
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
         val settings = webView.settings
@@ -446,10 +483,16 @@ class MainActivity : Activity() {
             return
         }
         workspaceVisible = true
-        if (loadedUrl != Runtime.workspaceUrl || webErrorBox.visibility == View.VISIBLE) {
-            loadedUrl = Runtime.workspaceUrl
-            reloadWorkspace()
-        }
+        val url = Runtime.workspaceUrl
+        val reload = RestartPolicy.shouldReloadWorkspace(
+            loadedUrl,
+            url,
+            webViewRestored,
+            webErrorBox.visibility == View.VISIBLE,
+        )
+        webViewRestored = false
+        loadedUrl = url
+        if (reload) reloadWorkspace()
         shell.visibility = View.GONE
         webContainer.visibility = View.VISIBLE
         applyImmersive(true)
@@ -1068,12 +1111,10 @@ class MainActivity : Activity() {
             Runtime.phase != Runtime.Phase.READY -> saveHint.text = getString(R.string.save_pending_start)
             else -> {
                 // Restarting is only needed when the config actually changed.
-                // The service now reuses the same port and the config keeps the
-                // login credential, so the WebView origin and localStorage
-                // survive and the user stays logged in with their chats intact.
+                // The port is pinned and the WebView keeps its page, so a
+                // restart no longer logs the user out or drops the last reply.
                 saveHint.text = getString(R.string.save_apply)
                 reenterAfterRestart = true
-                loadedUrl = null
                 RuntimeService.restart(this)
             }
         }
@@ -1360,7 +1401,9 @@ class MainActivity : Activity() {
                 result.onSuccess { count ->
                     Runtime.log("备份已恢复：$count 个文件")
                     backupStatus.text = getString(R.string.restore_done, count)
+                    // A restore replaces session files, so the page must be rebuilt.
                     loadedUrl = null
+                    webViewRestored = false
                     loadSettingsIntoUi()
                     render()
                 }.onFailure { error ->
@@ -1536,7 +1579,14 @@ class MainActivity : Activity() {
         render()
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        captureWebViewState()?.let { outState.putBundle(KEY_WEB_STATE, it) }
+    }
+
     override fun onPause() {
+        // Snapshot before pausing so a later recreation can restore the page.
+        captureWebViewState()
         runCatching { webView.onPause() }
         super.onPause()
     }

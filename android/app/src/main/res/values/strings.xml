@@ -70,7 +70,7 @@
     <string name="model_entry_unknown_id">⚠ id 不在模型列表，建议重选</string>
     <string name="model_hint_multi">可以同时添加多个服务商，例如 Kimi 和 DeepSeek 并存，工作台里随时切换</string>
     <string name="save_need_entries">先添加至少一个模型并填入 API Key</string>
-    <string name="save_apply">已保存，正在重启；登录状态与聊天记录会保留</string>
+    <string name="save_apply">已保存，正在后台重启；页面不会刷新，登录状态与聊天记录保留</string>
     <string name="save_unchanged">配置没有变化，无需重启；登录状态保持不变</string>
     <string name="save_pending_install">已保存，安装运行环境后自动生效</string>
     <string name="save_pending_start">已保存，下次启动服务时生效</string>
