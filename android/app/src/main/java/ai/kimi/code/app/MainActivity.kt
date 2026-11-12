@@ -562,12 +562,29 @@ class MainActivity : Activity() {
     private lateinit var checkSwipeBack: CheckBox
     private lateinit var checkLan: CheckBox
     private lateinit var checkKeepAwake: CheckBox
+    private lateinit var rowModelPick: View
+    private lateinit var textModelPick: TextView
+    private lateinit var textModelPickSub: TextView
+    private lateinit var btnPickModel: TextView
+    private lateinit var btnFetchModels: TextView
+    private lateinit var btnProbeModel: TextView
+    private lateinit var textModelStatus: TextView
+    private lateinit var btnToggleAdvanced: TextView
+    private lateinit var advancedPanel: View
+    private lateinit var checkManualModel: CheckBox
 
     /** Index of the entry being edited, or null while adding a new one. */
     private var editingIndex: Int? = null
 
     /** Set while a config-triggered restart is in flight, so we return to the workspace. */
     private var reenterAfterRestart = false
+
+    /** Upstream model ids per endpoint, so reopening the picker is instant. */
+    private val catalogCache = LinkedHashMap<String, List<String>>()
+    private var fetchInFlight = false
+
+    private fun catalogKey(baseUrl: String, apiKey: String, type: String): String =
+        "$type|${baseUrl.trim()}|${apiKey.trim().hashCode()}"
 
     private fun setupSettingsPage() {
         modelList = findViewById(R.id.modelList)
@@ -583,6 +600,16 @@ class MainActivity : Activity() {
         editContext = findViewById(R.id.editContext)
         spinnerEffort = findViewById(R.id.spinnerEffort)
         saveHint = findViewById(R.id.saveHint)
+        rowModelPick = findViewById(R.id.rowModelPick)
+        textModelPick = findViewById(R.id.textModelPick)
+        textModelPickSub = findViewById(R.id.textModelPickSub)
+        btnPickModel = findViewById(R.id.btnPickModel)
+        btnFetchModels = findViewById(R.id.btnFetchModels)
+        btnProbeModel = findViewById(R.id.btnProbeModel)
+        textModelStatus = findViewById(R.id.textModelStatus)
+        btnToggleAdvanced = findViewById(R.id.btnToggleAdvanced)
+        advancedPanel = findViewById(R.id.advancedPanel)
+        checkManualModel = findViewById(R.id.checkManualModel)
         spinnerEffort.adapter = ArrayAdapter(
             this,
             android.R.layout.simple_spinner_dropdown_item,
@@ -606,6 +633,8 @@ class MainActivity : Activity() {
                 if (index != null || position !in Prefs.PRESETS.indices) return
                 val preset = Prefs.PRESETS[position]
                 fillEditor(preset, suggestAlias(preset))
+                catalogCache.clear()
+                autoFetchModels()
             }
 
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
@@ -623,6 +652,27 @@ class MainActivity : Activity() {
         }
 
         findViewById<View>(R.id.btnAddModel).setOnClickListener { openEditor(null) }
+        rowModelPick.setOnClickListener { openModelPicker() }
+        btnPickModel.setOnClickListener { openModelPicker() }
+        btnFetchModels.setOnClickListener { fetchModels(showDialog = true) }
+        btnProbeModel.setOnClickListener { probeModel() }
+        btnToggleAdvanced.setOnClickListener {
+            val expanded = advancedPanel.visibility != View.VISIBLE
+            advancedPanel.visibility = if (expanded) View.VISIBLE else View.GONE
+            btnToggleAdvanced.text = getString(
+                if (expanded) R.string.action_advanced_hide else R.string.action_advanced,
+            )
+        }
+        checkManualModel.setOnCheckedChangeListener { _, checked ->
+            editModel.visibility = if (checked) View.VISIBLE else View.GONE
+        }
+        editApiKey.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) autoFetchModels() }
+        editBaseUrl.setOnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus) {
+                catalogCache.clear()
+                autoFetchModels()
+            }
+        }
         findViewById<Button>(R.id.btnConfirmEntry).setOnClickListener { confirmEntry() }
         findViewById<Button>(R.id.btnCancelEdit).setOnClickListener { closeEditor() }
         findViewById<Button>(R.id.btnSave).setOnClickListener { saveSettings() }
@@ -666,7 +716,9 @@ class MainActivity : Activity() {
             column.addView(
                 textLabel(
                     buildString {
-                        append(entry.preset.label)
+                        append(ModelCatalog.describe(entry.model).vendor)
+                        append(" · ")
+                        append(entry.contextSize / 1024).append("K")
                         append(" · ")
                         append(entry.type)
                         if (isActive) append(" · ").append(getString(R.string.model_entry_default))
@@ -725,12 +777,18 @@ class MainActivity : Activity() {
         editContext.setText(preset.contextSize.toString())
         editApiKey.setText("")
         spinnerEffort.setSelection(0, false)
+        updateModelPick()
     }
 
     private fun openEditor(index: Int?) {
         editingIndex = index
         editorPanel.visibility = View.VISIBLE
         editorHint.visibility = View.GONE
+        advancedPanel.visibility = View.GONE
+        btnToggleAdvanced.text = getString(R.string.action_advanced)
+        checkManualModel.isChecked = false
+        editModel.visibility = View.GONE
+        setStatus(getString(R.string.model_pick_hint))
         if (index == null) {
             editorTitle.text = getString(R.string.action_add_model)
             val position = spinnerProvider.selectedItemPosition.coerceIn(0, Prefs.PRESETS.lastIndex)
@@ -752,6 +810,8 @@ class MainActivity : Activity() {
         spinnerProvider.setSelection(position.coerceAtLeast(0), false)
         val effortIndex = Prefs.EFFORTS.indexOfFirst { it.first == entry.effort }
         spinnerEffort.setSelection(effortIndex.coerceAtLeast(0), false)
+        updateModelPick()
+        autoFetchModels()
     }
 
     private fun closeEditor() {
@@ -761,9 +821,10 @@ class MainActivity : Activity() {
     }
 
     private fun confirmEntry() {
-        val alias = editAlias.text.toString().trim()
+        val preset = currentPreset()
+        val alias = editAlias.text.toString().trim().ifBlank { suggestAlias(preset) }
         val apiKey = editApiKey.text.toString().trim()
-        val baseUrl = editBaseUrl.text.toString().trim()
+        val baseUrl = editBaseUrl.text.toString().trim().ifBlank { preset.baseUrl }
         val model = editModel.text.toString().trim()
         val contextSize = editContext.text.toString().trim().toIntOrNull() ?: 131072
 
@@ -774,7 +835,6 @@ class MainActivity : Activity() {
             return
         }
 
-        val preset = Prefs.PRESETS[spinnerProvider.selectedItemPosition.coerceIn(0, Prefs.PRESETS.lastIndex)]
         val effort = Prefs.EFFORTS[spinnerEffort.selectedItemPosition.coerceIn(0, Prefs.EFFORTS.lastIndex)].first
         val entries = Prefs.load(this).toMutableList()
         val entry = Prefs.Entry(
@@ -792,6 +852,122 @@ class MainActivity : Activity() {
         renderModelList()
         closeEditor()
         toast(getString(R.string.model_added))
+    }
+
+    // ------------------------------------------------------- model discovery
+
+    private fun currentPreset(): Prefs.Preset =
+        Prefs.PRESETS[spinnerProvider.selectedItemPosition.coerceIn(0, Prefs.PRESETS.lastIndex)]
+
+    private fun editorEndpoint(): Triple<String, String, String> {
+        val baseUrl = editBaseUrl.text.toString().trim().ifBlank { currentPreset().baseUrl }
+        return Triple(baseUrl, editApiKey.text.toString().trim(), currentPreset().type)
+    }
+
+    private fun setStatus(message: String, warn: Boolean = false) {
+        textModelStatus.text = message
+        textModelStatus.setTextColor(getColor(if (warn) R.color.warn else R.color.text_muted))
+    }
+
+    private fun updateModelPick() {
+        val id = editModel.text.toString().trim()
+        if (id.isEmpty()) {
+            textModelPick.text = getString(R.string.model_pick_placeholder)
+            textModelPickSub.text = getString(R.string.model_pick_sub)
+        } else {
+            val info = ModelCatalog.describe(id)
+            textModelPick.text = info.id
+            textModelPickSub.text = "${info.vendor} · 上下文 ${info.contextSize / 1024}K"
+        }
+    }
+
+    private fun openModelPicker() {
+        val (baseUrl, apiKey, type) = editorEndpoint()
+        if (baseUrl.isBlank() || apiKey.isBlank()) {
+            toast(getString(R.string.model_status_need_key))
+        }
+        val key = catalogKey(baseUrl, apiKey, type)
+        ModelPickerDialog.show(
+            activity = this,
+            baseUrl = baseUrl,
+            apiKey = apiKey,
+            type = type,
+            current = editModel.text.toString().trim(),
+            cached = catalogCache[key] ?: emptyList(),
+            onCache = { ids ->
+                catalogCache[key] = ids
+                setStatus(getString(R.string.model_fetched, ids.size))
+            },
+            onPicked = { model -> applyPickedModel(model) },
+        )
+    }
+
+    private fun applyPickedModel(model: CatalogModel) {
+        editModel.setText(model.id)
+        editContext.setText(model.contextSize.toString())
+        if (editAlias.text.toString().isBlank()) editAlias.setText(suggestAlias(currentPreset()))
+        updateModelPick()
+        setStatus("已选择 ${model.id} · ${model.vendor}；点「验证模型可用」可提前确认")
+    }
+
+    /** Fetch on key / base-url blur, but never repeat a request we already made. */
+    private fun autoFetchModels() {
+        val (baseUrl, apiKey, type) = editorEndpoint()
+        if (baseUrl.isBlank() || apiKey.isBlank()) return
+        val key = catalogKey(baseUrl, apiKey, type)
+        val cached = catalogCache[key]
+        if (cached != null) {
+            setStatus(getString(R.string.model_fetched, cached.size))
+            return
+        }
+        fetchModels(showDialog = false)
+    }
+
+    private fun fetchModels(showDialog: Boolean) {
+        val (baseUrl, apiKey, type) = editorEndpoint()
+        if (baseUrl.isBlank() || apiKey.isBlank()) {
+            setStatus(getString(R.string.model_status_need_key), warn = true)
+            return
+        }
+        if (fetchInFlight) return
+        fetchInFlight = true
+        setStatus(getString(R.string.model_status_fetching))
+        val key = catalogKey(baseUrl, apiKey, type)
+        Thread {
+            val result = ModelCatalog.fetch(baseUrl, apiKey, type)
+            runOnUiThread {
+                fetchInFlight = false
+                if (isFinishing) return@runOnUiThread
+                if (result.error != null) {
+                    setStatus(result.error, warn = true)
+                } else {
+                    catalogCache[key] = result.ids
+                    setStatus(getString(R.string.model_fetched, result.ids.size))
+                    if (showDialog) openModelPicker()
+                }
+            }
+        }.start()
+    }
+
+    private fun probeModel() {
+        val model = editModel.text.toString().trim()
+        if (model.isEmpty()) {
+            toast(getString(R.string.model_probe_need))
+            return
+        }
+        val (baseUrl, apiKey, type) = editorEndpoint()
+        if (baseUrl.isBlank() || apiKey.isBlank()) {
+            setStatus(getString(R.string.model_status_need_key), warn = true)
+            return
+        }
+        setStatus(getString(R.string.model_status_probing))
+        Thread {
+            val result = ModelCatalog.probe(baseUrl, apiKey, model, type)
+            runOnUiThread {
+                if (isFinishing) return@runOnUiThread
+                setStatus(result.message, warn = !result.ok)
+            }
+        }.start()
     }
 
     private fun deleteEntry(index: Int) {

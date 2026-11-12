@@ -597,64 +597,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:text="@string/field_provider_name"
-                        android:textColor="@color/text_primary"
-                        android:textSize="12sp"
-                        android:textStyle="bold" />
-
-                    <EditText
-                        android:id="@+id/editAlias"
-                        android:layout_width="match_parent"
-                        android:layout_height="44dp"
-                        android:hint="@string/hint_provider_name"
-                        android:importantForAutofill="no"
-                        android:inputType="textNoSuggestions"
-                        android:singleLine="true"
-                        android:textSize="13sp" />
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:text="@string/field_base_url"
-                        android:textColor="@color/text_primary"
-                        android:textSize="12sp"
-                        android:textStyle="bold" />
-
-                    <EditText
-                        android:id="@+id/editBaseUrl"
-                        android:layout_width="match_parent"
-                        android:layout_height="44dp"
-                        android:hint="@string/hint_base_url"
-                        android:importantForAutofill="no"
-                        android:inputType="textUri"
-                        android:singleLine="true"
-                        android:textSize="13sp" />
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:text="@string/field_model"
-                        android:textColor="@color/text_primary"
-                        android:textSize="12sp"
-                        android:textStyle="bold" />
-
-                    <EditText
-                        android:id="@+id/editModel"
-                        android:layout_width="match_parent"
-                        android:layout_height="44dp"
-                        android:hint="@string/hint_model"
-                        android:importantForAutofill="no"
-                        android:inputType="textNoSuggestions"
-                        android:singleLine="true"
-                        android:textSize="13sp" />
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
+                        android:layout_marginTop="10dp"
                         android:text="@string/field_api_key"
                         android:textColor="@color/text_primary"
                         android:textSize="12sp"
@@ -673,44 +616,224 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:text="@string/field_context"
+                        android:layout_marginTop="12dp"
+                        android:text="@string/field_model"
                         android:textColor="@color/text_primary"
                         android:textSize="12sp"
                         android:textStyle="bold" />
 
-                    <EditText
-                        android:id="@+id/editContext"
-                        android:layout_width="match_parent"
-                        android:layout_height="44dp"
-                        android:hint="@string/hint_context"
-                        android:importantForAutofill="no"
-                        android:inputType="number"
-                        android:singleLine="true"
-                        android:textSize="13sp" />
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:text="@string/field_effort"
-                        android:textColor="@color/text_primary"
-                        android:textSize="12sp"
-                        android:textStyle="bold" />
-
-                    <Spinner
-                        android:id="@+id/spinnerEffort"
-                        android:layout_width="match_parent"
-                        android:layout_height="44dp"
-                        android:layout_marginTop="4dp" />
-
-                    <TextView
+                    <LinearLayout
+                        android:id="@+id/rowModelPick"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="@string/hint_effort"
+                        android:background="@drawable/bg_card"
+                        android:gravity="center_vertical"
+                        android:minHeight="58dp"
+                        android:orientation="horizontal"
+                        android:paddingLeft="12dp"
+                        android:paddingTop="8dp"
+                        android:paddingRight="12dp"
+                        android:paddingBottom="8dp">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/textModelPick"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="@string/model_pick_placeholder"
+                                android:textColor="@color/text_primary"
+                                android:textSize="14sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/textModelPickSub"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="@string/model_pick_sub"
+                                android:textColor="@color/text_muted"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/btnPickModel"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/bg_chip_accent"
+                            android:paddingLeft="12dp"
+                            android:paddingTop="8dp"
+                            android:paddingRight="12dp"
+                            android:paddingBottom="8dp"
+                            android:text="@string/action_pick_model"
+                            android:textColor="@color/accent"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/btnFetchModels"
+                            android:layout_width="0dp"
+                            android:layout_height="40dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_chip_accent"
+                            android:gravity="center"
+                            android:text="@string/action_fetch_models"
+                            android:textColor="@color/accent"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/btnProbeModel"
+                            android:layout_width="0dp"
+                            android:layout_height="40dp"
+                            android:layout_marginLeft="8dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_chip_accent"
+                            android:gravity="center"
+                            android:text="@string/action_probe_model"
+                            android:textColor="@color/accent"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/textModelStatus"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="@string/model_pick_hint"
                         android:textColor="@color/text_muted"
                         android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/btnToggleAdvanced"
+                        android:layout_width="match_parent"
+                        android:layout_height="40dp"
+                        android:layout_marginTop="12dp"
+                        android:gravity="center_vertical"
+                        android:text="@string/action_advanced"
+                        android:textColor="@color/accent"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+
+                    <LinearLayout
+                        android:id="@+id/advancedPanel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/field_provider_name"
+                            android:textColor="@color/text_primary"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+
+                        <EditText
+                            android:id="@+id/editAlias"
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:hint="@string/hint_provider_name"
+                            android:importantForAutofill="no"
+                            android:inputType="textNoSuggestions"
+                            android:singleLine="true"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/field_base_url"
+                            android:textColor="@color/text_primary"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+
+                        <EditText
+                            android:id="@+id/editBaseUrl"
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:hint="@string/hint_base_url"
+                            android:importantForAutofill="no"
+                            android:inputType="textUri"
+                            android:singleLine="true"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/field_context"
+                            android:textColor="@color/text_primary"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+
+                        <EditText
+                            android:id="@+id/editContext"
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:hint="@string/hint_context"
+                            android:importantForAutofill="no"
+                            android:inputType="number"
+                            android:singleLine="true"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/field_effort"
+                            android:textColor="@color/text_primary"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+
+                        <Spinner
+                            android:id="@+id/spinnerEffort"
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:layout_marginTop="4dp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="@string/hint_effort"
+                            android:textColor="@color/text_muted"
+                            android:textSize="11sp" />
+
+                        <CheckBox
+                            android:id="@+id/checkManualModel"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="@string/check_manual_model"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="12sp" />
+
+                        <EditText
+                            android:id="@+id/editModel"
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:hint="@string/hint_model"
+                            android:importantForAutofill="no"
+                            android:inputType="textNoSuggestions"
+                            android:singleLine="true"
+                            android:textSize="13sp"
+                            android:visibility="gone" />
+                    </LinearLayout>
 
                     <LinearLayout
                         android:layout_width="match_parent"

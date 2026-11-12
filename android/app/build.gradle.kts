@@ -13,11 +13,10 @@ android {
         targetSdk = 28
         // Must stay strictly above whatever is installed on the device:
         // Android refuses to overwrite an APK with a lower/equal versionCode.
-        // main was 2.6.0 / 9; 2.8.0 shipped as 20. Raised to 21 so this
-        // 2.8.1 hotfix can overwrite any 2.6.x / 2.7.x / 2.8.0 build.
-        // Android refuses to overwrite an APK with a lower/equal versionCode.
-        versionCode = 21
-        versionName = "2.8.1"
+        // 2.9.0 reworks model selection: auto-discovery + searchable picker.
+        // Must stay strictly above 2.8.1 / 21 to overwrite the installed build.
+        versionCode = 22
+        versionName = "2.9.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

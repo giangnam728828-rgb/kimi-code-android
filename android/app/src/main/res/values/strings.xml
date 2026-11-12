@@ -48,15 +48,15 @@
     <string name="value_model_empty">尚未配置，去设置里填 API Key</string>
     <string name="log_empty">暂无日志</string>
 
-    <string name="settings_hint">填入你自己的模型 API Key，App 会自动写入配置，重启后生效。</string>
+    <string name="settings_hint">填入 API Key 后会自动拉取可用模型；选好模型保存，重启后生效。</string>
     <string name="field_provider">模型服务商</string>
     <string name="field_provider_name">名称（配置里的 provider key）</string>
     <string name="field_base_url">接口地址</string>
     <string name="field_api_key">API Key</string>
-    <string name="field_model">模型名称</string>
+    <string name="field_model">模型（从列表选，不用手填）</string>
     <string name="field_context">上下文长度</string>
     <string name="hint_base_url">https://api.example.com/v1</string>
-    <string name="hint_model">例如 kimi-k2-turbo-preview</string>
+    <string name="hint_model">仅在手动输入时填写服务商给出的准确 id</string>
     <string name="hint_api_key">sk-…</string>
     <string name="hint_context">例如 131072</string>
     <string name="hint_provider_name">例如 deepseek、openrouter、my-gateway</string>
@@ -65,7 +65,7 @@
     <string name="action_cancel">取消</string>
     <string name="action_delete">删除</string>
     <string name="action_set_default">设为默认</string>
-    <string name="model_list_empty">还没有配置模型，点下面的按钮选一个服务商</string>
+    <string name="model_list_empty">还没有模型，点「添加模型」，填好 API Key 后会自动列出来</string>
     <string name="model_entry_default">默认</string>
     <string name="model_hint_multi">可以同时添加多个服务商，例如 Kimi 和 DeepSeek 并存，工作台里随时切换</string>
     <string name="save_need_entries">先添加至少一个模型并填入 API Key</string>
@@ -78,6 +78,22 @@
     <string name="save_need_key_new">请填写 API Key 与模型名称</string>
     <string name="model_added">已加入列表，点下面的「保存」后生效</string>
     <string name="model_default_pending">已设为默认模型，点下面的「保存」后生效</string>
+
+    <string name="model_pick_placeholder">点右边「选择」挑一个模型</string>
+    <string name="model_pick_sub">从接口自动拉取，不用手填</string>
+    <string name="model_pick_none">还没有选模型</string>
+    <string name="action_pick_model">选择</string>
+    <string name="action_fetch_models">自动获取模型</string>
+    <string name="action_probe_model">验证模型可用</string>
+    <string name="model_pick_hint">填好 API Key 后会自动获取；列表里的名称才是网关真正接受的 id</string>
+    <string name="action_advanced">高级选项（名称 / 接口地址 / 上下文 / 思考强度）</string>
+    <string name="action_advanced_hide">收起高级选项</string>
+    <string name="check_manual_model">手动输入模型名</string>
+    <string name="model_status_need_key">先填 API Key 和接口地址，再自动获取</string>
+    <string name="model_status_fetching">正在获取模型列表…</string>
+    <string name="model_status_probing">正在验证模型…</string>
+    <string name="model_fetched">已获取 %1$d 个模型，点「选择」挑一个</string>
+    <string name="model_probe_need">先选一个模型再验证</string>
 
     <string name="setting_auto_enter">就绪后自动进入工作台</string>
     <string name="setting_auto_enter_sub">打开 App 直接跳到工作台，不再停在首页</string>
