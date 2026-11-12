@@ -61,6 +61,8 @@
     <string name="hint_context">例如 131072</string>
     <string name="hint_provider_name">例如 deepseek、openrouter、my-gateway</string>
     <string name="action_add_model">添加模型</string>
+    <string name="action_manage_provider_models">管理同一服务商的多个模型 / API</string>
+    <string name="model_hint_web_switch">配好后在工作台输入框旁的模型下拉 /「更多模型」里直接切换，不用保存、不用重启</string>
     <string name="action_edit">编辑</string>
     <string name="action_cancel">取消</string>
     <string name="action_delete">删除</string>

@@ -82,8 +82,6 @@ class MainActivity : Activity() {
 
     private lateinit var webContainer: FrameLayout
     private lateinit var webView: WebView
-    /** In-workspace shortcut: change models / API key without leaving the chat. */
-    private lateinit var quickFab: TextView
     private lateinit var webLoading: ProgressBar
     private lateinit var webErrorBox: View
     private lateinit var webErrorTitle: TextView
@@ -180,7 +178,6 @@ class MainActivity : Activity() {
         webErrorTitle = findViewById(R.id.webErrorTitle)
         webErrorDetail = findViewById(R.id.webErrorDetail)
         findViewById<View>(R.id.webErrorRetry).setOnClickListener { reloadWorkspace() }
-        setupQuickFab()
 
         btnPrimary.setOnClickListener { onPrimaryAction() }
         btnRestart.setOnClickListener {
@@ -480,51 +477,6 @@ class MainActivity : Activity() {
         }
     }
 
-    /** A small native chip over the WebView: the chat page never has to be left. */
-    private fun setupQuickFab() {
-        quickFab = TextView(this).apply {
-            text = "设置模型"
-            setTextColor(getColor(R.color.white))
-            textSize = 12f
-            gravity = android.view.Gravity.CENTER
-            maxLines = 1
-            maxWidth = dp(170)
-            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
-            setBackgroundResource(R.drawable.bg_chip_accent)
-            val pad = dp(13)
-            setPadding(pad, dp(9), pad, dp(9))
-            alpha = 0.95f
-            visibility = View.GONE
-            setOnClickListener {
-                QuickSettingsDialog.show(
-                    this@MainActivity,
-                    onRefresh = { reloadWorkspace() },
-                    onChanged = { syncQuickFab() },
-                )
-            }
-        }
-        val lp = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-        ).apply {
-            gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
-            bottomMargin = dp(16)
-            marginEnd = dp(12)
-        }
-        webContainer.addView(quickFab, lp)
-    }
-
-    private fun syncQuickFab() {
-        if (!::quickFab.isInitialized) return
-        val active = Prefs.activeEntry(this)
-        quickFab.text = when {
-            active == null || !active.isConfigured -> "设置模型"
-            active.registeredModels.size > 1 -> "${active.model} · ${active.registeredModels.size} 个"
-            else -> active.model
-        }
-        quickFab.visibility = if (workspaceVisible) View.VISIBLE else View.GONE
-    }
-
     private fun openWorkspace() {
         if (Runtime.phase != Runtime.Phase.READY || Runtime.workspaceUrl.isEmpty()) {
             toast("服务还没就绪")
@@ -543,7 +495,6 @@ class MainActivity : Activity() {
         if (reload) reloadWorkspace()
         shell.visibility = View.GONE
         webContainer.visibility = View.VISIBLE
-        syncQuickFab()
         applyImmersive(true)
     }
 
@@ -614,7 +565,6 @@ class MainActivity : Activity() {
         pageSettings.visibility = if (currentPage == R.id.pageSettings) View.VISIBLE else View.GONE
         pageData.visibility = if (currentPage == R.id.pageData) View.VISIBLE else View.GONE
         pageTerminal.visibility = if (currentPage == R.id.pageTerminal) View.VISIBLE else View.GONE
-        syncQuickFab()
         applyImmersive(false)
     }
 
@@ -761,6 +711,43 @@ class MainActivity : Activity() {
         }
 
         findViewById<View>(R.id.btnAddModel).setOnClickListener { openEditor(null) }
+        // Adding several models under one API key belongs in settings, not in a
+        // floating chip over the WebView (that chip used to cover the page's
+        // send button). The web UI's own model dropdown does the switching;
+        // this dialog only edits the configuration once, up front.
+        val modelCard = findViewById<View>(R.id.btnAddModel).parent as? LinearLayout
+        modelCard?.addView(
+            TextView(this).apply {
+                text = getString(R.string.action_manage_provider_models)
+                setTextColor(getColor(R.color.accent))
+                textSize = 13f
+                gravity = android.view.Gravity.CENTER
+                setPadding(dp(10), dp(12), dp(10), dp(14))
+                setOnClickListener {
+                    QuickSettingsDialog.show(
+                        this@MainActivity,
+                        onRefresh = { reloadWorkspace() },
+                        onChanged = { renderModelList(); render() },
+                    )
+                }
+            },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        modelCard?.addView(
+            TextView(this).apply {
+                text = getString(R.string.model_hint_web_switch)
+                setTextColor(getColor(R.color.text_muted))
+                textSize = 11f
+                setPadding(dp(10), 0, dp(10), dp(12))
+            },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
         rowModelPick.setOnClickListener { openModelPicker() }
         btnPickModel.setOnClickListener { openModelPicker() }
         btnFetchModels.setOnClickListener { fetchModels(showDialog = true) }
@@ -1591,7 +1578,6 @@ class MainActivity : Activity() {
             getString(R.string.value_model_empty)
         }
         valueWorkspace.text = Prefs.workspace(this)
-        syncQuickFab()
 
         val logVersion = Runtime.logVersion
         if (logVersion != lastRenderedLogVersion) {

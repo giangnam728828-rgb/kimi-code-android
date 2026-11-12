@@ -13,11 +13,12 @@ android {
         targetSdk = 28
         // Must stay strictly above whatever is installed on the device:
         // Android refuses to overwrite an APK with a lower/equal versionCode.
-        // 2.12.0: repair the broken provider alias, allow a custom short name,
-        // register several models under one API key, and edit them in-workspace.
-        // Must stay strictly above 2.11.0 / 24 to overwrite the installed build.
-        versionCode = 25
-        versionName = "2.12.0"
+        // 2.13.0: remove the floating quick-settings chip that covered the web
+        // page's send button; switching belongs to the web UI's own model
+        // dropdown, configuration belongs to the settings page.
+        // Must stay strictly above 2.12.0 / 25 to overwrite the installed build.
+        versionCode = 26
+        versionName = "2.13.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

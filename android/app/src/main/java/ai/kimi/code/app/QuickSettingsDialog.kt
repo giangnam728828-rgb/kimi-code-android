@@ -17,17 +17,17 @@ import android.widget.TextView
 import android.widget.Toast
 
 /**
- * Settings that live *inside* the workspace.
+ * Configuration for one provider (one API address + key), opened from the
+ * settings page -- NOT from a floating chip over the WebView. An earlier build
+ * put a native chip at the bottom-right of the workspace; it covered the web
+ * page's send button and duplicated the web UI's own model dropdown.
  *
- * Before 2.12.0 changing a model meant: leave the chat, open the settings tab,
- * edit one model, save (which restarts proot), then re-enter the chat. Users
- * with several models under one API key had to repeat that for every model.
- *
- * This dialog is opened from a small native chip over the WebView. It can
- * switch between models already registered under the current provider, add a
- * new one from the gateway catalogue, or edit the API address / key, and applies
- * everything in place. The port is pinned and the page is never reloaded, so
- * the login state and the conversation survive (see RestartPolicy).
+ * The web UI's own model dropdown switches between models already registered
+ * in config.toml, with no save and no restart. This dialog only edits that
+ * configuration up front: add another model of the same provider from the
+ * gateway catalogue, set the default, or change the API address / key. It
+ * applies everything in the background; the port is pinned and the page is
+ * never reloaded, so login state and conversation survive (see RestartPolicy).
  *
  * The whole View is built in code, like ModelPickerDialog: no new XML ids, no
  * resource-table churn.
@@ -46,7 +46,7 @@ object QuickSettingsDialog {
         var dialog: AlertDialog? = null
 
         val status = TextView(activity).apply {
-            text = "点模型名即可切换，全部共用一个 API 地址和 Key"
+            text = "这里只配置；日常切换请用工作台输入框旁的模型下拉"
             setTextColor(activity.getColor(R.color.text_secondary))
             textSize = 12f
         }
@@ -144,7 +144,7 @@ object QuickSettingsDialog {
                     }
                 })
             }
-            status.text = "接入名「${entry.alias}」· 已登记 ${ids.size} 个模型，点名字即可切换"
+            status.text = "接入名「${entry.alias}」· 已登记 ${ids.size} 个模型；网页下拉里可直接切换"
         }
 
         fun syncInputs() {
@@ -228,7 +228,7 @@ object QuickSettingsDialog {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(16), dp(20), dp(8))
         }
-        root.addView(label("随手切换 · 不用退出聊天", bold = true).apply { textSize = 15f })
+        root.addView(label("配置这个接入 · 同一服务商的多个模型", bold = true).apply { textSize = 15f })
         root.addView(status)
         root.addView(divider(), LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 1,
@@ -254,7 +254,7 @@ object QuickSettingsDialog {
             },
         )
         actions.addView(
-            chip("仅连不上时刷新") { onRefresh(); dialog?.dismiss() },
+            chip("重载工作台页面") { onRefresh(); dialog?.dismiss() },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
         root.addView(actions, LinearLayout.LayoutParams(
@@ -277,7 +277,7 @@ object QuickSettingsDialog {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
         ).apply { topMargin = dp(10) })
-        root.addView(label("切换后后台自动重连，聊天记录与登录态保留；网页里也可用「更多模型」直接切。").apply {
+        root.addView(label("保存后后台重连，聊天记录与登录态保留；日常切模型请直接用网页里的下拉。").apply {
             setPadding(0, dp(10), 0, 0)
         })
 
