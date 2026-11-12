@@ -192,7 +192,9 @@ class MainActivity : Activity() {
         }
         findViewById<View>(R.id.rowAddress).setOnClickListener { copyAddress() }
         findViewById<View>(R.id.rowLan).setOnClickListener { toggleLan() }
-        findViewById<View>(R.id.rowModel).setOnClickListener { switchPage(R.id.pageSettings) }
+        findViewById<View>(R.id.rowModel).setOnClickListener { openProviderPage() }
+        // 工作台顶栏右上角「模型供应商」按钮：直接从聊天入口管理模型。
+        findViewById<View>(R.id.btnProviderEntry).setOnClickListener { openProviderPage() }
         findViewById<View>(R.id.rowWorkspace).setOnClickListener { promptWorkspace() }
         findViewById<View>(R.id.btnSaveLog).setOnClickListener { saveLog() }
         btnOpenWeb.setOnClickListener { openWorkspace() }
@@ -223,6 +225,11 @@ class MainActivity : Activity() {
         targets.forEach { (navId, pageId) ->
             findViewById<View>(navId).setOnClickListener { switchPage(pageId) }
         }
+    }
+
+    /** 2.16.0：Eta 风格的模型供应商两级管理页。 */
+    private fun openProviderPage() {
+        startActivity(Intent(this, ProviderActivity::class.java))
     }
 
     private fun switchPage(pageId: Int) {
@@ -374,6 +381,12 @@ class MainActivity : Activity() {
         settings.loadWithOverviewMode = false
         settings.builtInZoomControls = false
         settings.cacheMode = WebSettings.LOAD_DEFAULT
+        // 2.16.0 流畅性：本地工作台的静态资源复用缓存（LOAD_DEFAULT 已覆盖），
+        // 开启硬件加速渲染层，滚动与输入更跟手。不动 localStorage，登录态与
+        // 聊天记录依旧按同源保留。
+        settings.loadsImagesAutomatically = true
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        webView.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
@@ -726,7 +739,7 @@ class MainActivity : Activity() {
             render()
         }
 
-        findViewById<View>(R.id.btnAddModel).setOnClickListener { openEditor(null) }
+        findViewById<View>(R.id.btnAddModel).setOnClickListener { openProviderPage() }
         // Adding several models under one API key belongs in settings, not in a
         // floating chip over the WebView (that chip used to cover the page's
         // send button). The web UI's own model dropdown does the switching;
@@ -748,33 +761,30 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = dp(8) },
         )
+        // 2.16.0：主入口改为 Eta 风格两级页，不再让用户面对多选 dialog
+        // + 手动输入 + 高级选项那一长串控件。
         modelCard?.addView(
             TextView(this).apply {
-                text = getString(R.string.action_manage_provider_models)
-                setTextColor(getColor(R.color.accent))
-                textSize = 13f
+                text = getString(R.string.action_open_providers) + "  ›"
+                setTextColor(getColor(R.color.white))
+                textSize = 14f
                 gravity = android.view.Gravity.CENTER
-                setPadding(dp(10), dp(12), dp(10), dp(14))
-                setOnClickListener {
-                    QuickSettingsDialog.show(
-                        this@MainActivity,
-                        onRefresh = { reloadWorkspace() },
-                        onChanged = { renderModelList(); render() },
-                        onRegisterAll = { registerAllModels() },
-                    )
-                }
+                setTypeface(null, android.graphics.Typeface.BOLD)
+                setBackgroundResource(R.drawable.btn_primary)
+                setPadding(dp(10), dp(13), dp(10), dp(13))
+                setOnClickListener { openProviderPage() }
             },
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
+            ).apply { topMargin = dp(8) },
         )
         modelCard?.addView(
             TextView(this).apply {
-                text = getString(R.string.model_hint_web_switch)
+                text = getString(R.string.provider_entry_hint)
                 setTextColor(getColor(R.color.text_muted))
                 textSize = 11f
-                setPadding(dp(10), 0, dp(10), dp(12))
+                setPadding(dp(10), dp(8), dp(10), dp(12))
             },
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -908,19 +918,27 @@ class MainActivity : Activity() {
         }
     }
 
-    /** 把某个模型设为该分组的默认模型；不同分组互不影响。 */
+    /**
+     * 把某个模型设为该分组的默认模型；不同分组互不影响。
+     *
+     * 2.16.0：改为轻量热更新 —— 只改 config.toml 顶层的 `default_model` 一行，
+     * 不重建 `[models.*]` 段（那正是 2.15.0 报错的根源），也不重启整个 proot
+     * 环境。网页重新加载一次即可拿到新默认值，聊天记录与登录态都不受影响。
+     */
     private fun switchModelInGroup(index: Int, id: String) {
         val entries = Prefs.load(this).toMutableList()
         val entry = entries.getOrNull(index) ?: return
         if (entry.model.equals(id, ignoreCase = true)) return
         entries[index] = entry.copy(model = id)
         Prefs.save(this, entries)
-        runCatching { ConfigWriter.write(this, entries, Prefs.activeEntry(this)) }
+        val key = ConfigMerger.modelKey(entry.alias, id)
+        val changed = runCatching { ConfigWriter.setDefaultModel(this, key, entry.contextSize) }
             .onFailure { toast("写入配置失败：${it.message}") }
-        RuntimeService.restart(this)
+            .getOrDefault(false)
+        if (workspaceVisible && changed) reloadWorkspace()
         renderModelList()
         render()
-        toast("「$id」已设为分组「${entry.alias}」的默认模型")
+        toast("「$id」已设为分组「${entry.alias}」的默认模型（无需重启）")
     }
 
     /**
@@ -1861,6 +1879,13 @@ class MainActivity : Activity() {
         // so without this the user returns from the browser and stays stuck on
         // "waiting" until the next timer tick.
         runCatching { webView.onResume() }
+        // 从「模型供应商」页返回：配置已变化，刷新主界面并让网页重新读一次
+        // 模型清单。切换默认模型只改了一行 config，重载网页即可，无需重启 proot。
+        if (ProviderActivity.changed) {
+            ProviderActivity.changed = false
+            renderModelList()
+            if (workspaceVisible) reloadWorkspace()
+        }
         render()
     }
 

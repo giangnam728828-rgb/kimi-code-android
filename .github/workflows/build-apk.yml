@@ -143,9 +143,9 @@ jobs:
         if: github.ref != 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: test-model-group-2.15.0
+          tag_name: test-provider-2.16.0
           target_commitish: ${{ github.sha }}
-          name: "Kimi Code Android v${{ env.APP_VERSION }} (model group / multi-pick, stable key)"
+          name: "Kimi Code Android v${{ env.APP_VERSION }} (Eta-style providers / hot switch, stable key)"
           prerelease: true
           files: output/Kimi-Code-Android.apk
         env:
