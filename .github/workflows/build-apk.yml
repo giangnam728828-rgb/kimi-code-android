@@ -137,6 +137,20 @@ jobs:
           path: output/Kimi-Code-Android.apk
           if-no-files-found: error
 
+      # Test branches: publish the APK under its own tag so it can be installed
+      # directly, without touching the rootfs-v1 release used by everyone else.
+      - name: Publish test APK to a separate tag
+        if: github.ref != 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: test-fix-login-state
+          target_commitish: ${{ github.sha }}
+          name: "test build v${{ env.APP_VERSION }} (fix/login-state)"
+          prerelease: true
+          files: output/Kimi-Code-Android.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       # Published once out-of-band; the workflow must not clobber it, because the
       # asset is also served from the older v3.0.0-rc1 release.
       - name: Fetch rootfs archive for the release
