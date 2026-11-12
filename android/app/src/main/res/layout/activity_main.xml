@@ -547,7 +547,7 @@
                         android:background="@drawable/bg_chip_accent"
                         android:gravity="center"
                         android:text="@string/action_add_model"
-                        android:textColor="@color/accent"
+                        android:textColor="@color/white"
                         android:textSize="13sp"
                         android:textStyle="bold" />
                 </LinearLayout>
@@ -670,7 +670,7 @@
                             android:paddingRight="12dp"
                             android:paddingBottom="8dp"
                             android:text="@string/action_pick_model"
-                            android:textColor="@color/accent"
+                            android:textColor="@color/white"
                             android:textSize="12sp"
                             android:textStyle="bold" />
                     </LinearLayout>
@@ -689,7 +689,7 @@
                             android:background="@drawable/bg_chip_accent"
                             android:gravity="center"
                             android:text="@string/action_fetch_models"
-                            android:textColor="@color/accent"
+                            android:textColor="@color/white"
                             android:textSize="12sp"
                             android:textStyle="bold" />
 
@@ -702,7 +702,7 @@
                             android:background="@drawable/bg_chip_accent"
                             android:gravity="center"
                             android:text="@string/action_probe_model"
-                            android:textColor="@color/accent"
+                            android:textColor="@color/white"
                             android:textSize="12sp"
                             android:textStyle="bold" />
                     </LinearLayout>

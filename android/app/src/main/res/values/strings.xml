@@ -67,6 +67,7 @@
     <string name="action_set_default">设为默认</string>
     <string name="model_list_empty">还没有模型，点「添加模型」，填好 API Key 后会自动列出来</string>
     <string name="model_entry_default">默认</string>
+    <string name="model_entry_unknown_id">⚠ id 不在模型列表，建议重选</string>
     <string name="model_hint_multi">可以同时添加多个服务商，例如 Kimi 和 DeepSeek 并存，工作台里随时切换</string>
     <string name="save_need_entries">先添加至少一个模型并填入 API Key</string>
     <string name="save_apply">已保存，正在重启；登录状态与聊天记录会保留</string>
@@ -94,6 +95,9 @@
     <string name="model_status_probing">正在验证模型…</string>
     <string name="model_fetched">已获取 %1$d 个模型，点「选择」挑一个</string>
     <string name="model_probe_need">先选一个模型再验证</string>
+    <string name="model_id_not_in_catalog">当前「%1$s」不在这个接口的模型列表里，可能是展示名；点「选择」重新挑一个真实 id</string>
+    <string name="model_status_manual">手动输入模式：填服务商文档里的准确 id，别填展示名</string>
+    <string name="model_probe_recommend">建议点「验证模型可用」确认这个 id 能被网关接受</string>
 
     <string name="setting_auto_enter">就绪后自动进入工作台</string>
     <string name="setting_auto_enter_sub">打开 App 直接跳到工作台，不再停在首页</string>

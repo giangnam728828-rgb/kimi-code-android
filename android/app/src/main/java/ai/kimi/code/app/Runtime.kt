@@ -6,6 +6,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Single source of truth for the on-device runtime state. The service writes,
@@ -28,6 +29,11 @@ object Runtime {
     @Volatile var progress: Int = -1
     @Volatile var port: Int = 0
     @Volatile var workspaceUrl: String = ""
+    /**
+     * Bumped on every log line. The UI uses it to skip rebuilding the whole
+     * log TextView when nothing actually changed (see MainActivity.render).
+     */
+    @Volatile var logVersion: Int = 0
 
     private const val MAX_LOG_LINES = 500
     private val logLines = ArrayDeque<String>()
@@ -52,6 +58,7 @@ object Runtime {
             logLines.addLast(line)
             while (logLines.size > MAX_LOG_LINES) logLines.removeFirst()
         }
+        logVersion++
         notifyChanged()
     }
 
@@ -69,8 +76,19 @@ object Runtime {
         update(Phase.READY, "运行中", "工作台已就绪（端口 $port）")
     }
 
+    // During install/extract proot can emit hundreds of log lines per second.
+    // Coalesce them: only one notification runnable is ever queued, so the main
+    // thread renders the latest state once per frame instead of once per line.
+    private val notifyPending = AtomicBoolean(false)
+    private val notifyRunnable = Runnable {
+        notifyPending.set(false)
+        listeners.forEach { it() }
+    }
+
     fun notifyChanged() {
         if (listeners.isEmpty()) return
-        mainHandler.post { listeners.forEach { it() } }
+        if (notifyPending.compareAndSet(false, true)) {
+            mainHandler.post(notifyRunnable)
+        }
     }
 }

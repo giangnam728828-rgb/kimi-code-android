@@ -13,10 +13,10 @@ android {
         targetSdk = 28
         // Must stay strictly above whatever is installed on the device:
         // Android refuses to overwrite an APK with a lower/equal versionCode.
-        // 2.9.0 reworks model selection: auto-discovery + searchable picker.
-        // Must stay strictly above 2.8.1 / 21 to overwrite the installed build.
-        versionCode = 22
-        versionName = "2.9.0"
+        // 2.10.0: button contrast fix, full-repo bug sweep and fluency work.
+        // Must stay strictly above 2.9.0 / 22 to overwrite the installed build.
+        versionCode = 23
+        versionName = "2.10.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

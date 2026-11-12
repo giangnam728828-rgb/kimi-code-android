@@ -167,4 +167,30 @@ class ModelCatalogTest {
         assertTrue(result.ids.isEmpty())
         assertTrue(result.error?.contains("接口地址") == true)
     }
+
+    // ------------------------------------------- catalogue membership guard
+    // Guards the "no category route found" nudge: a saved display name that is
+    // not in the upstream catalogue must be flagged, but only when we actually
+    // have a catalogue. False alarms would be worse than no warning at all.
+
+    @Test
+    fun `isKnownId matches exact and case-insensitive ids`() {
+        val ids = listOf("xsparkx2agent", "kimi-k2-turbo-preview", "gpt-4o")
+        assertTrue(ModelCatalog.isKnownId(ids, "gpt-4o"))
+        assertTrue(ModelCatalog.isKnownId(ids, "GPT-4O"))
+        assertTrue(ModelCatalog.isKnownId(ids, "  kimi-k2-turbo-preview  "))
+    }
+
+    @Test
+    fun `isKnownId flags a display name absent from the catalogue`() {
+        val ids = listOf("xsparkx2agent", "xopglm52", "kimi-k2")
+        assertTrue(!ModelCatalog.isKnownId(ids, "Spark-X2.6-4B"))
+    }
+
+    @Test
+    fun `isKnownId never raises a false alarm without data`() {
+        assertTrue(ModelCatalog.isKnownId(emptyList(), "anything"))
+        assertTrue(ModelCatalog.isKnownId(listOf("gpt-4o"), ""))
+        assertTrue(ModelCatalog.isKnownId(listOf("gpt-4o"), "   "))
+    }
 }

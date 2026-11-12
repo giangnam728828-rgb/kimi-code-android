@@ -98,6 +98,19 @@ object ModelCatalog {
 
     fun describeAll(ids: List<String>): List<CatalogModel> = ids.map(::describe)
 
+    /**
+     * Whether [model] appears in an upstream catalogue. Case-insensitive
+     * because some gateways differ in casing between `/models` and the chat
+     * endpoint. An empty catalogue (endpoint not fetched) or an empty id is
+     * treated as "unknown but not provably wrong", so the UI never raises a
+     * false alarm when it simply has no data.
+     */
+    fun isKnownId(ids: List<String>, model: String): Boolean {
+        val id = model.trim()
+        if (id.isEmpty() || ids.isEmpty()) return true
+        return ids.any { it.trim().equals(id, ignoreCase = true) }
+    }
+
     /** Groups models by vendor, keeping the vendor order stable and ids sorted inside a group. */
     fun group(models: List<CatalogModel>): List<Pair<String, List<CatalogModel>>> =
         models.groupBy { it.vendorKey }

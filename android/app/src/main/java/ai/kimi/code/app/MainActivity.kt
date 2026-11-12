@@ -95,6 +95,15 @@ class MainActivity : Activity() {
     private var lastExternalUrl: String? = null
     private var lastExternalAt = 0L
 
+    // --- rendering caches: keep render() cheap when proot floods the log ---
+    private var lastRenderedLogVersion = -1
+    private var cachedLocalIp: String? = null
+    private var lastKeepAwake: Boolean? = null
+    private var cachedDataSize: Long? = null
+    private var dataSizeInFlight = false
+    /** Popup probe WebView from window.open; reused so it never accumulates. */
+    private var probeWebView: WebView? = null
+
     private val listener: () -> Unit = { runOnUiThread { render() } }
 
     private companion object {
@@ -348,7 +357,13 @@ class MainActivity : Activity() {
                 val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
                 // The popup URL is not on the message, so hand the transport a
                 // throwaway WebView whose only job is to report that first URL.
+                // Reuse a single probe: the old implementation allocated a
+                // WebView per popup and never destroyed it (leak on sign-in).
+                probeWebView?.let { old ->
+                    runCatching { old.post { old.destroy() } }
+                }
                 val probe = WebView(this@MainActivity)
+                probeWebView = probe
                 probe.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(
                         view: WebView?,
@@ -581,7 +596,8 @@ class MainActivity : Activity() {
 
     /** Upstream model ids per endpoint, so reopening the picker is instant. */
     private val catalogCache = LinkedHashMap<String, List<String>>()
-    private var fetchInFlight = false
+    /** Bumped per fetch; only the newest result may update the UI. */
+    private var fetchGeneration = 0L
 
     private fun catalogKey(baseUrl: String, apiKey: String, type: String): String =
         "$type|${baseUrl.trim()}|${apiKey.trim().hashCode()}"
@@ -665,7 +681,18 @@ class MainActivity : Activity() {
         }
         checkManualModel.setOnCheckedChangeListener { _, checked ->
             editModel.visibility = if (checked) View.VISIBLE else View.GONE
+            if (checked) {
+                editModel.requestFocus()
+                setStatus(getString(R.string.model_status_manual))
+            }
+            updateModelPick()
         }
+        // Keep the pick row in sync when the user types an id by hand.
+        editModel.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: android.text.Editable?) { updateModelPick() }
+        })
         editApiKey.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) autoFetchModels() }
         editBaseUrl.setOnFocusChangeListener { _, hasFocus ->
             if (!hasFocus) {
@@ -722,6 +749,9 @@ class MainActivity : Activity() {
                         append(" · ")
                         append(entry.type)
                         if (isActive) append(" · ").append(getString(R.string.model_entry_default))
+                        if (isUnknownToCatalog(entry)) {
+                            append(" · ").append(getString(R.string.model_entry_unknown_id))
+                        }
                     },
                     getColor(R.color.text_muted),
                     11f,
@@ -750,6 +780,19 @@ class MainActivity : Activity() {
                 ).apply { bottomMargin = dp(8) },
             )
         }
+    }
+
+    /**
+     * True when we have fetched this endpoint's catalogue and the saved id is
+     * not in it -- typically a display name typed by hand, which the gateway
+     * rejects with "no category route found". Only flags when we actually have
+     * a catalogue, so an unreachable endpoint never produces a false alarm.
+     */
+    private fun isUnknownToCatalog(entry: Prefs.Entry): Boolean {
+        val baseUrl = entry.baseUrl.ifBlank { entry.preset.baseUrl }
+        val key = catalogKey(baseUrl, entry.apiKey, entry.type)
+        val ids = catalogCache[key] ?: return false
+        return !ModelCatalog.isKnownId(ids, entry.model)
     }
 
     private fun actionButton(label: String, onClick: () -> Unit): TextView =
@@ -847,7 +890,7 @@ class MainActivity : Activity() {
             effort = effort,
         )
         val index = editingIndex
-        if (index == null) entries.add(entry) else entries[index] = entry
+        if (index != null && index in entries.indices) entries[index] = entry else entries.add(entry)
         Prefs.save(this, entries)
         renderModelList()
         closeEditor()
@@ -885,6 +928,8 @@ class MainActivity : Activity() {
         val (baseUrl, apiKey, type) = editorEndpoint()
         if (baseUrl.isBlank() || apiKey.isBlank()) {
             toast(getString(R.string.model_status_need_key))
+            setStatus(getString(R.string.model_status_need_key), warn = true)
+            return
         }
         val key = catalogKey(baseUrl, apiKey, type)
         ModelPickerDialog.show(
@@ -929,24 +974,30 @@ class MainActivity : Activity() {
             setStatus(getString(R.string.model_status_need_key), warn = true)
             return
         }
-        if (fetchInFlight) return
-        fetchInFlight = true
+        val generation = ++fetchGeneration
         setStatus(getString(R.string.model_status_fetching))
         val key = catalogKey(baseUrl, apiKey, type)
         Thread {
             val result = ModelCatalog.fetch(baseUrl, apiKey, type)
             runOnUiThread {
-                fetchInFlight = false
-                if (isFinishing) return@runOnUiThread
+                if (isFinishing || isDestroyed || generation != fetchGeneration) return@runOnUiThread
                 if (result.error != null) {
                     setStatus(result.error, warn = true)
                 } else {
                     catalogCache[key] = result.ids
-                    setStatus(getString(R.string.model_fetched, result.ids.size))
+                    val current = editModel.text.toString().trim()
+                    val stale = !ModelCatalog.isKnownId(result.ids, current)
+                    if (stale) {
+                        // A saved display name is the classic cause of
+                        // "no category route found". Nudge the user to re-pick.
+                        setStatus(getString(R.string.model_id_not_in_catalog, current), warn = true)
+                    } else {
+                        setStatus(getString(R.string.model_fetched, result.ids.size))
+                    }
                     if (showDialog) openModelPicker()
                 }
             }
-        }.start()
+        }.apply { isDaemon = true }.start()
     }
 
     private fun probeModel() {
@@ -964,10 +1015,10 @@ class MainActivity : Activity() {
         Thread {
             val result = ModelCatalog.probe(baseUrl, apiKey, model, type)
             runOnUiThread {
-                if (isFinishing) return@runOnUiThread
+                if (isFinishing || isDestroyed) return@runOnUiThread
                 setStatus(result.message, warn = !result.ok)
             }
-        }.start()
+        }.apply { isDaemon = true }.start()
     }
 
     private fun deleteEntry(index: Int) {
@@ -975,8 +1026,10 @@ class MainActivity : Activity() {
         if (index !in entries.indices) return
         entries.removeAt(index)
         Prefs.save(this, entries)
-        val activeIndex = entries.indexOfFirst { it.modelAlias == Prefs.activeEntry(this)?.modelAlias }
-        Prefs.setActiveEntry(this, activeIndex.coerceIn(0, maxOf(0, entries.size - 1)))
+        if (entries.isNotEmpty()) {
+            val activeIndex = entries.indexOfFirst { it.modelAlias == Prefs.activeEntry(this)?.modelAlias }
+            Prefs.setActiveEntry(this, activeIndex.coerceIn(0, entries.size - 1))
+        }
 
         val editing = editingIndex
         if (editing != null) {
@@ -1028,7 +1081,10 @@ class MainActivity : Activity() {
     }
 
     private fun applyKeepAwake() {
-        if (Prefs.keepAwake(this)) {
+        val keep = Prefs.keepAwake(this)
+        if (lastKeepAwake == keep) return
+        lastKeepAwake = keep
+        if (keep) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1135,10 +1191,22 @@ class MainActivity : Activity() {
             )
         }
 
-        Thread {
-            val size = BackupManager.dataSize(this)
-            runOnUiThread { valueDataSize.text = BackupManager.formatSize(size) }
-        }.apply { isDaemon = true }.start()
+        val cached = cachedDataSize
+        if (cached != null) {
+            valueDataSize.text = BackupManager.formatSize(cached)
+        } else if (!dataSizeInFlight) {
+            dataSizeInFlight = true
+            valueDataSize.text = getString(R.string.value_calculating)
+            Thread {
+                val size = BackupManager.dataSize(applicationContext)
+                runOnUiThread {
+                    dataSizeInFlight = false
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    cachedDataSize = size
+                    valueDataSize.text = BackupManager.formatSize(size)
+                }
+            }.apply { isDaemon = true }.start()
+        }
 
         val busy = backupBusy
         btnExportBackup.isEnabled = !busy
@@ -1183,6 +1251,7 @@ class MainActivity : Activity() {
                 BackupManager.createBackup(this, object : BackupManager.Progress {
                     override fun onProgress(percent: Int) {
                         runOnUiThread {
+                            if (isFinishing || isDestroyed) return@runOnUiThread
                             backupProgress.isIndeterminate = false
                             backupProgress.progress = percent.coerceAtLeast(0)
                             backupStatus.text =
@@ -1191,13 +1260,18 @@ class MainActivity : Activity() {
                     }
 
                     override fun onMessage(message: String) {
-                        runOnUiThread { backupStatus.text = message }
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed) return@runOnUiThread
+                            backupStatus.text = message
+                        }
                     }
                 })
             }
 
             runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
                 setBackupBusy(false)
+                cachedDataSize = null
                 result.onSuccess { backup ->
                     Runtime.log("备份完成：${backup.file.name}（${backup.items} 个文件）")
                     backupStatus.text = getString(
@@ -1219,6 +1293,7 @@ class MainActivity : Activity() {
         Thread {
             val share = runCatching { BackupManager.stageForSharing(this, file) }
             runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
                 share.onSuccess { uri ->
                     val intent = Intent(Intent.ACTION_SEND).apply {
                         type = "application/zip"
@@ -1270,13 +1345,18 @@ class MainActivity : Activity() {
                     override fun onProgress(percent: Int) = Unit
 
                     override fun onMessage(message: String) {
-                        runOnUiThread { backupStatus.text = message }
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed) return@runOnUiThread
+                            backupStatus.text = message
+                        }
                     }
                 })
             }
 
             runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
                 setBackupBusy(false)
+                cachedDataSize = null
                 result.onSuccess { count ->
                     Runtime.log("备份已恢复：$count 个文件")
                     backupStatus.text = getString(R.string.restore_done, count)
@@ -1329,13 +1409,22 @@ class MainActivity : Activity() {
                 BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
                     while (true) {
                         val line = reader.readLine() ?: break
-                        runOnUiThread { appendTerminal("$line\n") }
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed) return@runOnUiThread
+                            appendTerminal("$line\n")
+                        }
                     }
                 }
                 val code = process.waitFor()
-                runOnUiThread { appendTerminal("[退出码 $code]\n") }
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    appendTerminal("[退出码 $code]\n")
+                }
             } catch (error: Throwable) {
-                runOnUiThread { appendTerminal("执行失败：${error.message}\n") }
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    appendTerminal("执行失败：${error.message}\n")
+                }
             }
         }.apply { isDaemon = true }.start()
     }
@@ -1397,9 +1486,13 @@ class MainActivity : Activity() {
         }
         valueWorkspace.text = Prefs.workspace(this)
 
-        val lines = Runtime.snapshotLogs()
-        logText.text = if (lines.isEmpty()) getString(R.string.log_empty) else lines.joinToString("\n")
-        logContainer.post { logContainer.fullScroll(View.FOCUS_DOWN) }
+        val logVersion = Runtime.logVersion
+        if (logVersion != lastRenderedLogVersion) {
+            lastRenderedLogVersion = logVersion
+            val lines = Runtime.snapshotLogs()
+            logText.text = if (lines.isEmpty()) getString(R.string.log_empty) else lines.joinToString("\n")
+            logContainer.post { logContainer.fullScroll(View.FOCUS_DOWN) }
+        }
 
         applyKeepAwake()
 
@@ -1433,6 +1526,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        cachedLocalIp = null
         if (workspaceVisible) applyImmersive(true)
         // WebView.onResume fires `visibilitychange` inside the page. The web UI
         // only re-polls the sign-in flow when the document becomes visible again,
@@ -1449,6 +1543,8 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         Runtime.removeListener(listener)
+        probeWebView?.let { runCatching { it.destroy() } }
+        probeWebView = null
         super.onDestroy()
     }
 
@@ -1480,12 +1576,15 @@ class MainActivity : Activity() {
     }
 
     private fun localIp(): String {
-        return runCatching {
+        cachedLocalIp?.let { return it }
+        val found = runCatching {
             java.net.NetworkInterface.getNetworkInterfaces().toList()
                 .flatMap { it.inetAddresses.toList() }
                 .firstOrNull { !it.isLoopbackAddress && it is java.net.Inet4Address }
                 ?.hostAddress
         }.getOrNull() ?: "127.0.0.1"
+        cachedLocalIp = found
+        return found
     }
 
     private fun appVersionName(): String = runCatching {
