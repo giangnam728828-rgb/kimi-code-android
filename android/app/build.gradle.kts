@@ -16,9 +16,13 @@ android {
         // 2.13.0: remove the floating quick-settings chip that covered the web
         // page's send button; switching belongs to the web UI's own model
         // dropdown, configuration belongs to the settings page.
-        // Must stay strictly above 2.12.0 / 25 to overwrite the installed build.
-        versionCode = 26
-        versionName = "2.13.0"
+        // 2.14.0: register the WHOLE catalogue of an endpoint, not just the
+        // picked model. The web dropdown is built from `[models.*]` sections,
+        // so one section per model is what makes every model of the same key
+        // switchable without another save/restart.
+        // Must stay strictly above 2.13.0 / 26 to overwrite the installed build.
+        versionCode = 27
+        versionName = "2.14.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

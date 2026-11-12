@@ -77,12 +77,17 @@ object Prefs {
          * Every model id this provider registers in config.toml. One provider
          * (one API key + base URL) can now serve several models, so the web UI's
          * "more models" menu can switch between them without re-saving.
+         *
+         * De-duplicated case-insensitively on purpose: [ConfigMerger.modelKey]
+         * lowercases the section name, so `Foo` and `foo` would emit the same
+         * `[models."alias/foo"]` header twice and make the whole file invalid
+         * TOML -- which stops the server from booting.
          */
         val registeredModels: List<String>
             get() = (models + model)
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
-                .distinct()
+                .distinctBy { it.lowercase() }
                 .take(Prefs.MAX_MODELS_PER_PROVIDER)
     }
 

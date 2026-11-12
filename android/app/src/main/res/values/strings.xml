@@ -80,7 +80,11 @@
     <string name="hint_effort">低 / 中 / 高；选「跟随服务端」则不改写工作台里的设置。仅设默认档位，关闭思考不会报错</string>
     <string name="save_need_key_new">请填写 API Key 与模型名称</string>
     <string name="model_added">已加入列表，点下面的「保存」后生效</string>
+    <string name="model_added_all">已登记 %1$d 个模型，保存后在网页下拉里直接切换</string>
     <string name="model_default_pending">已设为默认模型，点下面的「保存」后生效</string>
+    <string name="action_register_all_models">一键登记该接口的全部模型</string>
+    <string name="model_status_registering">正在登记全部模型…</string>
+    <string name="model_registered_all">已登记 %1$d 个模型，重启后在网页下拉里直接切换</string>
 
     <string name="model_pick_placeholder">点右边「选择」挑一个模型</string>
     <string name="model_pick_sub">从接口自动拉取，不用手填</string>

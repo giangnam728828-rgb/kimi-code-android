@@ -22,12 +22,11 @@ import android.widget.Toast
  * put a native chip at the bottom-right of the workspace; it covered the web
  * page's send button and duplicated the web UI's own model dropdown.
  *
- * The web UI's own model dropdown switches between models already registered
- * in config.toml, with no save and no restart. This dialog only edits that
- * configuration up front: add another model of the same provider from the
- * gateway catalogue, set the default, or change the API address / key. It
- * applies everything in the background; the port is pinned and the page is
- * never reloaded, so login state and conversation survive (see RestartPolicy).
+ * Opening this dialog immediately lists the whole `/v1/models` catalogue of the
+ * endpoint, not just the models already written to config.toml. One tap on any
+ * row registers that model under the provider and makes it the default, so a
+ * single visit covers every model behind the same key. After that the web UI's
+ * own dropdown switches between all of them with no save and no restart.
  *
  * The whole View is built in code, like ModelPickerDialog: no new XML ids, no
  * resource-table churn.
@@ -38,6 +37,7 @@ object QuickSettingsDialog {
         activity: Activity,
         onRefresh: () -> Unit,
         onChanged: () -> Unit,
+        onRegisterAll: () -> Unit,
     ) {
         if (activity.isFinishing || activity.isDestroyed) return
         val density = activity.resources.displayMetrics.density
@@ -92,6 +92,10 @@ object QuickSettingsDialog {
 
         val modelRows = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
 
+        /** Upstream ids of this endpoint, filled in by [loadCatalog]. */
+        var catalogIds: List<String> = emptyList()
+        var fetching = false
+
         fun activeIndex(): Int {
             val entries = Prefs.load(activity)
             if (entries.isEmpty()) return -1
@@ -118,6 +122,11 @@ object QuickSettingsDialog {
             toast("$message · 后台生效，页面不刷新")
         }
 
+        /**
+         * One row per model: registered ones switch the default, unregistered
+         * ones are added and switched in the same write. Kotlin local functions
+         * cannot be forward-referenced, so the click handling lives inline.
+         */
         fun renderModels() {
             modelRows.removeAllViews()
             val entries = Prefs.load(activity)
@@ -128,23 +137,51 @@ object QuickSettingsDialog {
                 return
             }
             val entry = entries[index]
-            val ids = entry.registeredModels
-            ids.forEach { id ->
+            val registered = entry.registeredModels
+            val merged = (registered + catalogIds)
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinctBy { it.lowercase() }
+            merged.forEach { id ->
                 val isCurrent = id.equals(entry.model, ignoreCase = true)
+                val isRegistered = registered.any { it.equals(id, ignoreCase = true) }
                 modelRows.addView(TextView(activity).apply {
-                    text = if (isCurrent) "✓  $id   （当前）" else "     $id"
+                    text = when {
+                        isCurrent -> "✓  $id   （当前）"
+                        isRegistered -> "     $id"
+                        else -> "＋ $id   （点一下加入）"
+                    }
                     textSize = 14f
-                    setTextColor(activity.getColor(if (isCurrent) R.color.accent else R.color.text_primary))
+                    setTextColor(
+                        activity.getColor(
+                            when {
+                                isCurrent -> R.color.accent
+                                isRegistered -> R.color.text_primary
+                                else -> R.color.text_muted
+                            },
+                        ),
+                    )
                     setPadding(dp(8), dp(11), dp(8), dp(11))
                     setOnClickListener {
-                        val list = entries.toMutableList()
-                        list[index] = list[index].copy(model = id)
-                        applyChange(list, index, "已切到 $id")
+                        val list = Prefs.load(activity).toMutableList()
+                        val at = activeIndex()
+                        if (at < 0) return@setOnClickListener
+                        val cur = list[at]
+                        list[at] = if (isRegistered) {
+                            cur.copy(model = id)
+                        } else {
+                            cur.copy(model = id, models = (cur.models + id).distinct())
+                        }
+                        applyChange(
+                            list, at,
+                            if (isRegistered) "已切到 $id" else "已登记并切到 $id",
+                        )
                         renderModels()
                     }
                 })
             }
-            status.text = "接入名「${entry.alias}」· 已登记 ${ids.size} 个模型；网页下拉里可直接切换"
+            status.text = "接入名「${entry.alias}」· 这个接口共 ${merged.size} 个模型，" +
+                "已登记 ${registered.size} 个；点一下即切换"
         }
 
         fun syncInputs() {
@@ -154,6 +191,35 @@ object QuickSettingsDialog {
             val e = entries[index]
             baseUrlEdit.setText(e.baseUrl.ifBlank { e.preset.baseUrl })
             apiKeyEdit.setText(e.apiKey)
+        }
+
+        /** Read the whole catalogue so the list is complete on first open. */
+        fun loadCatalog() {
+            if (fetching) return
+            val entries = Prefs.load(activity)
+            val index = activeIndex()
+            if (index < 0) return
+            val entry = entries[index]
+            val url = baseUrlEdit.text.toString().trim().ifBlank { entry.baseUrl.ifBlank { entry.preset.baseUrl } }
+            val key = apiKeyEdit.text.toString().trim().ifBlank { entry.apiKey }
+            if (url.isBlank() || key.isBlank()) {
+                status.text = "先填 API 地址与 Key，就能列出这个接口的全部模型"
+                return
+            }
+            fetching = true
+            status.text = "正在读取该接口的模型列表…"
+            Thread {
+                val result = ModelCatalog.fetch(url, key, entry.type)
+                activity.runOnUiThread {
+                    fetching = false
+                    if (activity.isFinishing || activity.isDestroyed) return@runOnUiThread
+                    if (result.ids.isNotEmpty()) catalogIds = result.ids
+                    renderModels()
+                    if (result.error != null) {
+                        status.text = "读取模型列表失败：${result.error}；仍可点击下面已登记的模型"
+                    }
+                }
+            }.apply { isDaemon = true }.start()
         }
 
         fun saveEndpoint() {
@@ -172,56 +238,13 @@ object QuickSettingsDialog {
             }
             entries[index] = cur.copy(baseUrl = url, apiKey = key)
             applyChange(entries, index, "已保存接入信息")
+            loadCatalog()
         }
 
-        fun addModel() {
-            val entries = Prefs.load(activity).toMutableList()
-            val index = activeIndex()
-            if (index < 0) {
-                toast("请先到「设置」页添加一个模型")
-                return
-            }
-            val url = baseUrlEdit.text.toString().trim().ifBlank { entries[index].preset.baseUrl }
-            val key = apiKeyEdit.text.toString().trim()
-            if (url.isBlank() || key.isBlank()) {
-                toast("先填好 API 地址和 Key")
-                return
-            }
-            val type = entries[index].type
-            val current = entries[index].model
-            // Persist the edited endpoint first so the picker probes the right
-            // gateway and nothing typed here is lost when the dialog reopens.
-            entries[index] = entries[index].copy(baseUrl = url, apiKey = key)
-            Prefs.save(activity, entries)
+        /** One tap registers the whole catalogue; no per-model picking loop. */
+        fun registerAll() {
             dialog?.dismiss()
-            ModelPickerDialog.show(
-                activity = activity,
-                baseUrl = url,
-                apiKey = key,
-                type = type,
-                current = current,
-                cached = emptyList(),
-                onCache = {},
-                onPicked = { picked ->
-                    val list = Prefs.load(activity).toMutableList()
-                    val i = activeIndex()
-                    if (i >= 0) {
-                        val cur = list[i]
-                        val all = (cur.models + cur.model + picked.id)
-                            .map { it.trim() }
-                            .filter { it.isNotEmpty() }
-                            .distinct()
-                        list[i] = cur.copy(
-                            model = picked.id,
-                            models = all.filterNot { it.equals(picked.id, ignoreCase = true) },
-                            baseUrl = url,
-                            apiKey = key,
-                        )
-                        applyChange(list, i, "已加入 ${picked.id}")
-                    }
-                    show(activity, onRefresh, onChanged)
-                },
-            )
+            onRegisterAll()
         }
 
         val root = LinearLayout(activity).apply {
@@ -230,9 +253,6 @@ object QuickSettingsDialog {
         }
         root.addView(label("配置这个接入 · 同一服务商的多个模型", bold = true).apply { textSize = 15f })
         root.addView(status)
-        root.addView(divider(), LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 1,
-        ).apply { topMargin = dp(10); bottomMargin = dp(6) })
 
         val modelScroll = ScrollView(activity)
         modelScroll.addView(
@@ -243,18 +263,18 @@ object QuickSettingsDialog {
             ),
         )
         root.addView(modelScroll, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(160),
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(190),
         ))
 
         val actions = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
         actions.addView(
-            chip("＋ 从目录添加模型") { addModel() },
+            chip("重新读取模型列表") { loadCatalog() },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                 marginEnd = dp(8)
             },
         )
         actions.addView(
-            chip("重载工作台页面") { onRefresh(); dialog?.dismiss() },
+            chip("一键登记全部") { registerAll() },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
         root.addView(actions, LinearLayout.LayoutParams(
@@ -262,8 +282,12 @@ object QuickSettingsDialog {
             ViewGroup.LayoutParams.WRAP_CONTENT,
         ).apply { topMargin = dp(8) })
 
+        root.addView(divider(), LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 1,
+        ).apply { topMargin = dp(12); bottomMargin = dp(6) })
+
         root.addView(label("接口与密钥（上面所有模型共用）", bold = true).apply {
-            setPadding(0, dp(12), 0, dp(4))
+            setPadding(0, dp(6), 0, dp(4))
         })
         root.addView(baseUrlEdit, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -277,8 +301,19 @@ object QuickSettingsDialog {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
         ).apply { topMargin = dp(10) })
-        root.addView(label("保存后后台重连，聊天记录与登录态保留；日常切模型请直接用网页里的下拉。").apply {
+        root.addView(TextView(activity).apply {
+            text = "点上面的模型即可切换并登记；保存后后台重连，聊天记录与登录态保留。"
+            textSize = 11f
+            setTextColor(activity.getColor(R.color.text_muted))
             setPadding(0, dp(10), 0, 0)
+        })
+        root.addView(TextView(activity).apply {
+            text = "重载工作台页面"
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setTextColor(activity.getColor(R.color.accent))
+            setPadding(0, dp(10), 0, dp(4))
+            setOnClickListener { onRefresh(); dialog?.dismiss() }
         })
 
         syncInputs()
@@ -288,5 +323,6 @@ object QuickSettingsDialog {
             .setNegativeButton("关闭", null)
             .create()
         dialog?.show()
+        loadCatalog()
     }
 }

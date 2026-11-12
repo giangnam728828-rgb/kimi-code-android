@@ -111,6 +111,45 @@ object ModelCatalog {
         return ids.any { it.trim().equals(id, ignoreCase = true) }
     }
 
+    /**
+     * All the models that must be registered under one provider, EXCLUDING the
+     * current default model (which is stored separately in `Entry.model`).
+     *
+     * The web UI's "more models" menu is built from the `[models.*]` sections in
+     * config.toml: one section == one switchable model. Registering only the
+     * model the user happened to pick is why the menu always showed a single
+     * entry and every other model of the same endpoint had to be added by hand.
+     * Passing the whole `/v1/models` catalogue here registers them all at once,
+     * so switching happens entirely inside the web page with no save/restart.
+     *
+     * Case-insensitive de-duplication matters: `ConfigMerger.modelKey()`
+     * lowercases section names, so two ids differing only by case would collide
+     * into a duplicate TOML key.
+     */
+    fun registrationExtras(
+        current: String,
+        extra: List<String>,
+        catalog: List<String>,
+        cap: Int,
+    ): List<String> {
+        if (cap <= 0) return emptyList()
+        val seen = HashSet<String>()
+        seen.add(current.trim().lowercase())
+        val out = ArrayList<String>(minOf(cap, catalog.size + extra.size))
+        fun offer(raw: String) {
+            if (out.size >= cap) return
+            val id = raw.trim()
+            if (id.isEmpty()) return
+            if (!seen.add(id.lowercase())) return
+            out.add(id)
+        }
+        // Real gateway ids first; anything the user typed manually comes after
+        // but is still preserved.
+        catalog.forEach(::offer)
+        extra.forEach(::offer)
+        return out
+    }
+
     /** Groups models by vendor, keeping the vendor order stable and ids sorted inside a group. */
     fun group(models: List<CatalogModel>): List<Pair<String, List<CatalogModel>>> =
         models.groupBy { it.vendorKey }

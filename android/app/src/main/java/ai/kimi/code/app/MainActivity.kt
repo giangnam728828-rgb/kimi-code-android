@@ -484,12 +484,16 @@ class MainActivity : Activity() {
         }
         workspaceVisible = true
         val url = Runtime.workspaceUrl
-        val reload = RestartPolicy.shouldReloadWorkspace(
+        val reload = forceReloadAfterRestart || RestartPolicy.shouldReloadWorkspace(
             loadedUrl,
             url,
             webViewRestored,
             webErrorBox.visibility == View.VISIBLE,
         )
+        // A catalogue registration adds `[models.*]` sections; the server reads
+        // them at startup, so the web page must fetch its model list once more.
+        // One reload here (same pinned origin) keeps login and chats intact.
+        forceReloadAfterRestart = false
         webViewRestored = false
         loadedUrl = url
         if (reload) reloadWorkspace()
@@ -637,10 +641,16 @@ class MainActivity : Activity() {
     /** Set while a config-triggered restart is in flight, so we return to the workspace. */
     private var reenterAfterRestart = false
 
+    /** Newly registered `[models.*]` sections only reach the web UI after one reload. */
+    private var forceReloadAfterRestart = false
+
     /** Upstream model ids per endpoint, so reopening the picker is instant. */
     private val catalogCache = LinkedHashMap<String, List<String>>()
     /** Bumped per fetch; only the newest result may update the UI. */
     private var fetchGeneration = 0L
+    /** One-shot upgrade heal: endpoints registered with a single model. */
+    private var autoRegisterRunning = false
+    private var autoRegisterAttempts = 0
 
     private fun catalogKey(baseUrl: String, apiKey: String, type: String): String =
         "$type|${baseUrl.trim()}|${apiKey.trim().hashCode()}"
@@ -716,6 +726,22 @@ class MainActivity : Activity() {
         // send button). The web UI's own model dropdown does the switching;
         // this dialog only edits the configuration once, up front.
         val modelCard = findViewById<View>(R.id.btnAddModel).parent as? LinearLayout
+        // Primary action: register every model of this endpoint in one tap.
+        modelCard?.addView(
+            TextView(this).apply {
+                text = getString(R.string.action_register_all_models)
+                setTextColor(getColor(R.color.white))
+                textSize = 13f
+                gravity = android.view.Gravity.CENTER
+                setBackgroundResource(R.drawable.btn_primary)
+                setPadding(dp(10), dp(12), dp(10), dp(12))
+                setOnClickListener { registerAllModels() }
+            },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(8) },
+        )
         modelCard?.addView(
             TextView(this).apply {
                 text = getString(R.string.action_manage_provider_models)
@@ -728,6 +754,7 @@ class MainActivity : Activity() {
                         this@MainActivity,
                         onRefresh = { reloadWorkspace() },
                         onChanged = { renderModelList(); render() },
+                        onRegisterAll = { registerAllModels() },
                     )
                 }
             },
@@ -973,6 +1000,18 @@ class MainActivity : Activity() {
         } else {
             emptyList()
         }
+        // The web UI's "more models" menu lists one entry per `[models.*]`
+        // section in config.toml. Registering only the model the user picked is
+        // why every other model of the same endpoint was missing from that menu
+        // and had to be added by hand. Fold the whole fetched catalogue in so a
+        // single save makes them all switchable inside the web page.
+        val catalog = catalogCache[catalogKey(baseUrl, apiKey, preset.type)].orEmpty()
+        val registered = ModelCatalog.registrationExtras(
+            current = model,
+            extra = existingModels,
+            catalog = catalog,
+            cap = Prefs.MAX_MODELS_PER_PROVIDER - 1,
+        )
         val entry = Prefs.Entry(
             presetId = preset.id,
             alias = alias,
@@ -981,13 +1020,16 @@ class MainActivity : Activity() {
             model = model,
             contextSize = contextSize,
             effort = effort,
-            models = existingModels,
+            models = registered,
         )
         if (index != null && index in entries.indices) entries[index] = entry else entries.add(entry)
         Prefs.save(this, entries)
         renderModelList()
         closeEditor()
-        toast(getString(R.string.model_added))
+        toast(
+            if (registered.size > 1) getString(R.string.model_added_all, registered.size + 1)
+            else getString(R.string.model_added),
+        )
     }
 
     // ------------------------------------------------------- model discovery
@@ -1137,9 +1179,41 @@ class MainActivity : Activity() {
         render()
     }
 
+    /**
+     * Fold every catalogue we already fetched into the entries before writing
+     * config.toml. One `[models.*]` section == one switchable model in the web
+     * dropdown, so registering only the picked model is exactly why the menu
+     * used to show a single entry. This is pure/local (uses the catalogue cached
+     * on key/URL blur), so saving stays instant and never waits on the network.
+     */
+    private fun mergeWithCatalog(entries: List<Prefs.Entry>): List<Prefs.Entry> =
+        entries.map { entry ->
+            if (!entry.isConfigured) return@map entry
+            val base = entry.baseUrl.ifBlank { entry.preset.baseUrl }
+            val ids = catalogCache[catalogKey(base, entry.apiKey, entry.type)]
+                ?: return@map entry
+            if (ids.isEmpty()) return@map entry
+            entry.copy(
+                models = ModelCatalog.registrationExtras(
+                    current = entry.model,
+                    extra = entry.models,
+                    catalog = ids,
+                    cap = Prefs.MAX_MODELS_PER_PROVIDER - 1,
+                ),
+            )
+        }
+
+    /**
+     * Persist the entries and apply them.
+     *
+     * Saving also registers the whole catalogue: the web dropdown is built from
+     * one `[models.*]` section per model, so a save that only knows the picked
+     * model leaves the user with a one-item menu and forces another trip
+     * through settings to switch. Endpoints whose catalogue was never fetched
+     * are listed right here, once, before the config is written.
+     */
     private fun saveSettings() {
-        val entries = Prefs.load(this)
-        val usable = entries.filter { it.isConfigured }
+        val usable = Prefs.load(this).filter { it.isConfigured }
         saveHint.setTextColor(getColor(R.color.text_secondary))
         saveHint.text = getString(R.string.settings_hint)
         if (usable.isEmpty()) {
@@ -1147,6 +1221,84 @@ class MainActivity : Activity() {
             saveHint.text = getString(R.string.save_need_entries)
             return
         }
+        val unfetched = usable.filter { entry ->
+            val base = entry.baseUrl.ifBlank { entry.preset.baseUrl }
+            base.isNotBlank() && entry.apiKey.isNotBlank() &&
+                catalogCache[catalogKey(base, entry.apiKey, entry.type)] == null
+        }
+        if (unfetched.isEmpty()) {
+            persistAndRestart()
+            return
+        }
+        val generation = ++fetchGeneration
+        saveHint.text = getString(R.string.model_status_fetching)
+        Thread {
+            val fresh = HashMap<String, List<String>>()
+            for (entry in unfetched) {
+                val base = entry.baseUrl.ifBlank { entry.preset.baseUrl }
+                val ids = ModelCatalog.fetch(base, entry.apiKey, entry.type).ids
+                if (ids.isNotEmpty()) {
+                    fresh[catalogKey(base, entry.apiKey, entry.type)] = ids
+                }
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed || generation != fetchGeneration) return@runOnUiThread
+                catalogCache.putAll(fresh)
+                persistAndRestart()
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
+    /** Merge every cached catalogue, store the entries, write config.toml. */
+    private fun persistAndRestart(reloadWeb: Boolean = false) {
+        val entries = mergeWithCatalog(Prefs.load(this))
+        Prefs.save(this, entries)
+        val total = entries.filter { it.isConfigured }.sumOf { it.registeredModels.size }
+        val message = if (total > 1) getString(R.string.model_registered_all, total) else null
+        writeConfigAndRestart(entries, successMessage = message, reloadWeb = reloadWeb)
+    }
+
+    /**
+     * Upgrade heal, runs once after the service is ready.
+     *
+     * Builds up to 2.13.0 saved only the model the user had picked, so the web
+     * dropdown listed a single entry per endpoint and switching meant going
+     * back to settings. Filling in the rest of the catalogue here means the
+     * dropdown is complete the first time the user opens the workspace, with no
+     * manual step. Capped at two attempts so a dead endpoint cannot loop.
+     */
+    private fun ensureCatalogRegistered() {
+        if (autoRegisterRunning || autoRegisterAttempts >= 2) return
+        val thin = Prefs.load(this).filter { it.isConfigured && it.registeredModels.size <= 1 }
+        if (thin.isEmpty()) return
+        autoRegisterRunning = true
+        autoRegisterAttempts++
+        Thread {
+            val fresh = HashMap<String, List<String>>()
+            for (entry in thin) {
+                val base = entry.baseUrl.ifBlank { entry.preset.baseUrl }
+                if (base.isBlank() || entry.apiKey.isBlank()) continue
+                val ids = ModelCatalog.fetch(base, entry.apiKey, entry.type).ids
+                if (ids.isNotEmpty()) {
+                    fresh[catalogKey(base, entry.apiKey, entry.type)] = ids
+                }
+            }
+            runOnUiThread {
+                autoRegisterRunning = false
+                if (isFinishing || isDestroyed || fresh.isEmpty()) return@runOnUiThread
+                Runtime.log("自动补全接口模型：${fresh.values.sumOf { it.size }} 个")
+                catalogCache.putAll(fresh)
+                persistAndRestart(reloadWeb = true)
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
+    /** Shared tail for a normal save and a full-catalogue registration. */
+    private fun writeConfigAndRestart(
+        entries: List<Prefs.Entry>,
+        successMessage: String? = null,
+        reloadWeb: Boolean = false,
+    ) {
         val written = runCatching { ConfigWriter.write(this, entries, Prefs.activeEntry(this)) }
         if (written.isFailure) {
             saveHint.setTextColor(getColor(R.color.danger))
@@ -1156,19 +1308,56 @@ class MainActivity : Activity() {
         val changed = written.getOrDefault(false)
         saveHint.setTextColor(getColor(R.color.ok))
         when {
-            !changed -> saveHint.text = getString(R.string.save_unchanged)
+            !changed -> saveHint.text = successMessage ?: getString(R.string.save_unchanged)
             !Paths.isRuntimeInstalled(this) -> saveHint.text = getString(R.string.save_pending_install)
             Runtime.phase != Runtime.Phase.READY -> saveHint.text = getString(R.string.save_pending_start)
             else -> {
                 // Restarting is only needed when the config actually changed.
                 // The port is pinned and the WebView keeps its page, so a
                 // restart no longer logs the user out or drops the last reply.
-                saveHint.text = getString(R.string.save_apply)
+                saveHint.text = successMessage ?: getString(R.string.save_apply)
                 reenterAfterRestart = true
+                if (reloadWeb) forceReloadAfterRestart = true
                 RuntimeService.restart(this)
             }
         }
+        renderModelList()
         render()
+    }
+
+    /**
+     * One tap: refetch every configured endpoint's /models catalogue and
+     * register ALL of its ids, then write config.toml and restart once. After
+     * this the web dropdown lists every model of the same provider and
+     * switching between them never needs another save or restart.
+     */
+    private fun registerAllModels() {
+        val usable = Prefs.load(this).filter { it.isConfigured }
+        if (usable.isEmpty()) {
+            toast(getString(R.string.save_need_entries))
+            return
+        }
+        val generation = ++fetchGeneration
+        saveHint.setTextColor(getColor(R.color.text_secondary))
+        saveHint.text = getString(R.string.model_status_registering)
+        Thread {
+            val fresh = HashMap<String, List<String>>()
+            for (entry in usable) {
+                val base = entry.baseUrl.ifBlank { entry.preset.baseUrl }
+                if (base.isBlank() || entry.apiKey.isBlank()) continue
+                val key = catalogKey(base, entry.apiKey, entry.type)
+                // Always refresh so a gateway that added models is picked up;
+                // keep the old cache as a fallback when the network is down.
+                val fetched = ModelCatalog.fetch(base, entry.apiKey, entry.type).ids
+                val ids = fetched.ifEmpty { catalogCache[key].orEmpty() }
+                if (ids.isNotEmpty()) fresh[key] = ids
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed || generation != fetchGeneration) return@runOnUiThread
+                catalogCache.putAll(fresh)
+                persistAndRestart(reloadWeb = true)
+            }
+        }.apply { isDaemon = true }.start()
     }
 
     private fun applyKeepAwake() {
@@ -1590,6 +1779,7 @@ class MainActivity : Activity() {
         applyKeepAwake()
 
         val ready = Runtime.phase == Runtime.Phase.READY && Runtime.workspaceUrl.isNotEmpty()
+        if (ready) ensureCatalogRegistered()
         val restartSettled = reenterAfterRestart &&
             Runtime.phase != Runtime.Phase.STARTING &&
             Runtime.phase != Runtime.Phase.INSTALLING
