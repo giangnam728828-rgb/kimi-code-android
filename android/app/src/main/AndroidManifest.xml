@@ -34,6 +34,13 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ProviderActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="false"
+            android:label="@string/provider_title"
+            android:windowSoftInputMode="adjustResize" />
+
         <service
             android:name=".RuntimeService"
             android:exported="false" />

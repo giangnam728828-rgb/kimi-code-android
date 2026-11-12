@@ -21,6 +21,7 @@ import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -192,7 +193,9 @@ class MainActivity : Activity() {
         }
         findViewById<View>(R.id.rowAddress).setOnClickListener { copyAddress() }
         findViewById<View>(R.id.rowLan).setOnClickListener { toggleLan() }
-        findViewById<View>(R.id.rowModel).setOnClickListener { switchPage(R.id.pageSettings) }
+        findViewById<View>(R.id.rowModel).setOnClickListener { openProviderPage() }
+        // 工作台顶栏右上角「模型供应商」按钮：直接从聊天入口管理模型。
+        findViewById<View>(R.id.btnProviderEntry).setOnClickListener { openProviderPage() }
         findViewById<View>(R.id.rowWorkspace).setOnClickListener { promptWorkspace() }
         findViewById<View>(R.id.btnSaveLog).setOnClickListener { saveLog() }
         btnOpenWeb.setOnClickListener { openWorkspace() }
@@ -225,7 +228,19 @@ class MainActivity : Activity() {
         }
     }
 
+    /** 2.16.0：Eta 风格的模型供应商两级管理页。 */
+    private fun openProviderPage() {
+        startActivity(Intent(this, ProviderActivity::class.java))
+    }
+
     private fun switchPage(pageId: Int) {
+        // 2.16.1：底部「设置」与顶栏「模型供应商」按钮都进 Eta 风格供应商页。
+        // 旧设置页（模型商编辑器 / 多选弹窗 / 手动输入 / 高级选项）彻底不再
+        // 展示，避免两套界面并存让用户觉得繁琐。App 偏好开关已搬进供应商页。
+        if (pageId == R.id.pageSettings) {
+            openProviderPage()
+            return
+        }
         currentPage = pageId
         pageHome.visibility = if (pageId == R.id.pageHome) View.VISIBLE else View.GONE
         pagePlugins.visibility = if (pageId == R.id.pagePlugins) View.VISIBLE else View.GONE
@@ -374,6 +389,21 @@ class MainActivity : Activity() {
         settings.loadWithOverviewMode = false
         settings.builtInZoomControls = false
         settings.cacheMode = WebSettings.LOAD_DEFAULT
+        // 2.16.1：登录态保活。WebView 的 cookie 是异步落盘的，覆盖安装/切后台
+        // 时进程被系统杀掉可能来不及写盘，表现就是「Kimi 账号掉了」。这里显式
+        // 允许 cookie 并在 onPause 强制 flush；localStorage 仍按同源保留。
+        settings.saveFormData = true
+        runCatching {
+            val cookies = CookieManager.getInstance()
+            cookies.setAcceptCookie(true)
+            cookies.setAcceptThirdPartyCookies(webView, true)
+        }
+        // 2.16.0 流畅性：本地工作台的静态资源复用缓存（LOAD_DEFAULT 已覆盖），
+        // 开启硬件加速渲染层，滚动与输入更跟手。不动 localStorage，登录态与
+        // 聊天记录依旧按同源保留。
+        settings.loadsImagesAutomatically = true
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        webView.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
@@ -465,7 +495,7 @@ class MainActivity : Activity() {
                 val fromEdge = e1.x < dp(48)
                 if (!Prefs.swipeBack(this@MainActivity)) return false
                 if (fromEdge && dx > dp(90) && dy < dp(120)) {
-                    if (webView.canGoBack()) webView.goBack() else hideWorkspace()
+                    handleWorkspaceBack()
                     return true
                 }
                 return false
@@ -726,7 +756,7 @@ class MainActivity : Activity() {
             render()
         }
 
-        findViewById<View>(R.id.btnAddModel).setOnClickListener { openEditor(null) }
+        findViewById<View>(R.id.btnAddModel).setOnClickListener { openProviderPage() }
         // Adding several models under one API key belongs in settings, not in a
         // floating chip over the WebView (that chip used to cover the page's
         // send button). The web UI's own model dropdown does the switching;
@@ -748,33 +778,30 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = dp(8) },
         )
+        // 2.16.0：主入口改为 Eta 风格两级页，不再让用户面对多选 dialog
+        // + 手动输入 + 高级选项那一长串控件。
         modelCard?.addView(
             TextView(this).apply {
-                text = getString(R.string.action_manage_provider_models)
-                setTextColor(getColor(R.color.accent))
-                textSize = 13f
+                text = getString(R.string.action_open_providers) + "  ›"
+                setTextColor(getColor(R.color.white))
+                textSize = 14f
                 gravity = android.view.Gravity.CENTER
-                setPadding(dp(10), dp(12), dp(10), dp(14))
-                setOnClickListener {
-                    QuickSettingsDialog.show(
-                        this@MainActivity,
-                        onRefresh = { reloadWorkspace() },
-                        onChanged = { renderModelList(); render() },
-                        onRegisterAll = { registerAllModels() },
-                    )
-                }
+                setTypeface(null, android.graphics.Typeface.BOLD)
+                setBackgroundResource(R.drawable.btn_primary)
+                setPadding(dp(10), dp(13), dp(10), dp(13))
+                setOnClickListener { openProviderPage() }
             },
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
+            ).apply { topMargin = dp(8) },
         )
         modelCard?.addView(
             TextView(this).apply {
-                text = getString(R.string.model_hint_web_switch)
+                text = getString(R.string.provider_entry_hint)
                 setTextColor(getColor(R.color.text_muted))
                 textSize = 11f
-                setPadding(dp(10), 0, dp(10), dp(12))
+                setPadding(dp(10), dp(8), dp(10), dp(12))
             },
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -908,19 +935,27 @@ class MainActivity : Activity() {
         }
     }
 
-    /** 把某个模型设为该分组的默认模型；不同分组互不影响。 */
+    /**
+     * 把某个模型设为该分组的默认模型；不同分组互不影响。
+     *
+     * 2.16.0：改为轻量热更新 —— 只改 config.toml 顶层的 `default_model` 一行，
+     * 不重建 `[models.*]` 段（那正是 2.15.0 报错的根源），也不重启整个 proot
+     * 环境。网页重新加载一次即可拿到新默认值，聊天记录与登录态都不受影响。
+     */
     private fun switchModelInGroup(index: Int, id: String) {
         val entries = Prefs.load(this).toMutableList()
         val entry = entries.getOrNull(index) ?: return
         if (entry.model.equals(id, ignoreCase = true)) return
         entries[index] = entry.copy(model = id)
         Prefs.save(this, entries)
-        runCatching { ConfigWriter.write(this, entries, Prefs.activeEntry(this)) }
+        val key = ConfigMerger.modelKey(entry.alias, id)
+        val changed = runCatching { ConfigWriter.setDefaultModel(this, key, entry.contextSize) }
             .onFailure { toast("写入配置失败：${it.message}") }
-        RuntimeService.restart(this)
+            .getOrDefault(false)
+        if (workspaceVisible && changed) reloadWorkspace()
         renderModelList()
         render()
-        toast("「$id」已设为分组「${entry.alias}」的默认模型")
+        toast("「$id」已设为分组「${entry.alias}」的默认模型（无需重启）")
     }
 
     /**
@@ -1825,20 +1860,12 @@ class MainActivity : Activity() {
 
         val ready = Runtime.phase == Runtime.Phase.READY && Runtime.workspaceUrl.isNotEmpty()
         if (ready) ensureCatalogRegistered()
-        val restartSettled = reenterAfterRestart &&
-            Runtime.phase != Runtime.Phase.STARTING &&
-            Runtime.phase != Runtime.Phase.INSTALLING
-        if (restartSettled) {
-            // Consume the flag whether the restart succeeded or failed, so it
-            // cannot fire much later on an unrelated render.
+        // 2.16.1：一律不自动进入工作台。服务/解压就绪后停在启动页，由用户自己
+        // 点「进入工作台」；配置保存后的 restart 也一样，不再自动跳回网页。
+        // restart 标记仍在这里消费掉，避免残留到后续 render。
+        if (reenterAfterRestart && Runtime.phase != Runtime.Phase.STARTING &&
+            Runtime.phase != Runtime.Phase.INSTALLING) {
             reenterAfterRestart = false
-            if (ready && !workspaceVisible && currentPage == R.id.pageSettings) {
-                Runtime.log("配置已生效，自动返回工作台")
-                openWorkspace()
-            }
-        } else if (ready && !workspaceVisible && Prefs.autoEnter(this) && currentPage == R.id.pageHome) {
-            Runtime.log("已开启自动进入，直接打开工作台")
-            openWorkspace()
         }
     }
 
@@ -1861,6 +1888,13 @@ class MainActivity : Activity() {
         // so without this the user returns from the browser and stays stuck on
         // "waiting" until the next timer tick.
         runCatching { webView.onResume() }
+        // 从「模型供应商」页返回：配置已变化，刷新主界面并让网页重新读一次
+        // 模型清单。切换默认模型只改了一行 config，重载网页即可，无需重启 proot。
+        if (ProviderActivity.changed) {
+            ProviderActivity.changed = false
+            renderModelList()
+            if (workspaceVisible) reloadWorkspace()
+        }
         render()
     }
 
@@ -1872,6 +1906,9 @@ class MainActivity : Activity() {
     override fun onPause() {
         // Snapshot before pausing so a later recreation can restore the page.
         captureWebViewState()
+        // 2.16.1：把 cookie 立刻刷到磁盘，避免进程被杀（覆盖安装、切后台回收）
+        // 时登录态还没落盘而丢失。
+        runCatching { CookieManager.getInstance().flush() }
         runCatching { webView.onPause() }
         super.onPause()
     }
@@ -1883,9 +1920,57 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    /**
+     * 2.16.1：网页里的「更多模型 / 模型下拉」是纯 DOM 浮层或用 replaceState，
+     * 不产生 WebView 历史记录。旧实现里 canGoBack()==false 就直接 hideWorkspace()，
+     * 于是一按返回就跳出工作台（用户反馈的现象）。这里先让网页自己关浮层，
+     * 确认没有浮层之后才退出工作台；有真实历史时仍走 goBack 回到上一级。
+     */
+    private fun handleWorkspaceBack() {
+        if (webView.canGoBack()) {
+            webView.goBack()
+            return
+        }
+        val js = """
+            (function() {
+              var sels = ['[role="dialog"]','[role="menu"]','[role="listbox"]',
+                          '[aria-modal="true"]','[data-state="open"]',
+                          '.modal','.popover','.dropdown-menu',
+                          '[data-radix-popper-content-wrapper]'];
+              for (var i = 0; i < sels.length; i++) {
+                var nodes = document.querySelectorAll(sels[i]);
+                for (var j = 0; j < nodes.length; j++) {
+                  var el = nodes[j];
+                  var r = el.getBoundingClientRect();
+                  var st = window.getComputedStyle(el);
+                  if (r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none') {
+                    var close = el.querySelector('[aria-label="Close"],[aria-label="close"],[aria-label="关闭"],button.close,[data-dismiss]');
+                    if (close) { close.click(); return 'true'; }
+                    var ev = new KeyboardEvent('keydown', {key:'Escape', code:'Escape', keyCode:27, which:27, bubbles:true});
+                    document.dispatchEvent(ev);
+                    window.dispatchEvent(ev);
+                    return 'true';
+                  }
+                }
+              }
+              return 'false';
+            })()
+        """.trimIndent()
+        val exitIfIdle = Runnable {
+            if (webContainer.visibility == View.VISIBLE) hideWorkspace()
+        }
+        val ok = runCatching {
+            webView.evaluateJavascript(js) { value ->
+                val handled = value?.trim()?.trim('"') == "true"
+                if (!handled) exitIfIdle.run()
+            }
+        }.isSuccess
+        if (!ok) exitIfIdle.run()
+    }
+
     override fun onBackPressed() {
         if (webContainer.visibility == View.VISIBLE) {
-            if (webView.canGoBack()) webView.goBack() else hideWorkspace()
+            handleWorkspaceBack()
             return
         }
         if (currentPage != R.id.pageHome) {

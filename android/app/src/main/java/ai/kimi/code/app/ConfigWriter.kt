@@ -220,8 +220,14 @@ object Prefs {
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().putBoolean(key, value).apply()
     }
 
-    fun autoEnter(context: Context): Boolean = flag(context, KEY_AUTO_ENTER, true)
-    fun setAutoEnter(context: Context, enabled: Boolean) = setFlag(context, KEY_AUTO_ENTER, enabled)
+    /**
+     * 2.16.1：用户明确要求「加载完成后不要自动进入工作台，要自己按『进入工作台』」。
+     * 旧版默认 true，且 MainActivity.onResume 会在就绪后自动跳转，这里彻底关闭。
+     * 保留 setter 仅为兼容旧偏好数据；即便用户以前存过 true 也不再生效。
+     * 对应开关已从设置页移除（设置页被供应商页替代）。
+     */
+    fun autoEnter(context: Context): Boolean = false
+    fun setAutoEnter(context: Context, enabled: Boolean) = setFlag(context, KEY_AUTO_ENTER, false)
 
     fun swipeBack(context: Context): Boolean = flag(context, KEY_SWIPE_BACK, true)
     fun setSwipeBack(context: Context, enabled: Boolean) = setFlag(context, KEY_SWIPE_BACK, enabled)
@@ -300,11 +306,13 @@ object ConfigWriter {
         val chosen = active?.takeIf { c -> usable.any { it.modelAlias == c.modelAlias } }
             ?: usable.firstOrNull()
         return buildString {
-            // v5: force one rewrite. 2.14.0 merged two model groups into a
-            // single providers.<alias>, so the web menu showed a flat list with
-            // no group separation. Bumping the signature makes this version
-            // regenerate config.toml once, splitting the groups again.
-            append("v5|")
+            // v6: force one rewrite. 2.15.0 dropped historical [models.*]
+            // sections on every save, so switching to a model that the web
+            // dropdown still offered produced
+            // `Model "..." is not configured in config.toml`. Bumping the
+            // signature rebuilds the managed block once and absorbs every
+            // historical section back in, healing already-broken installs.
+            append("v6|")
             append(chosen?.modelAlias.orEmpty()).append('|')
             usable.sortedBy { it.modelAlias }.forEach {
                 append(it.modelAlias).append('|')
@@ -357,14 +365,22 @@ object ConfigWriter {
         } else {
             problems.forEach { Runtime.log("模型分组校验异常：$it") }
         }
-        val managed = ModelGroup.renderManaged(groups)
-
         val file = configFile(context)
         val existing = readText(file)
-        // Any model previously registered under one of our aliases but no
-        // longer selected must disappear, otherwise the web menu keeps offering
-        // a model that config.toml no longer points at a working provider.
-        val dropPrefixes = ModelGroup.dropPrefixes(groups)
+
+        // 2.16.0 根治：模型段「只增不删」。网页下拉列表是页面加载时读旧
+        // config 渲染的，删掉任何历史段都会让那个仍被展示的 key 变成
+        // `is not configured`。把本次未重新生成的历史段原样并回 managed 块，
+        // 保证网页能选到的每个 model key 都有对应的 [models.*] 段。
+        val generatedKeys = groups.flatMap { it.modelKeys() }.toSet()
+        val preserved = ModelConfig.preservedSections(existing, generatedKeys)
+        // 逐模型参数（上下文 / 思考强度）来自新的供应商管理页；旧配置没有
+        // ProviderStore 数据时为空 map，行为与 2.15.0 一致。
+        val tuning = runCatching { ProviderStore.tuningFor(ProviderStore.load(context)) }
+            .getOrDefault(emptyMap())
+        val managed = ModelGroup.renderManaged(groups, tuning) +
+            if (preserved.isBlank()) "" else "\n" + preserved
+
         // 顶层 default_model 必须指向一个真实存在的 model key。分组 alias 在
         // 拆开重复项后可能带 -2 后缀，所以不能再用旧 entry 的 modelAlias。
         val chosenIndex = usable.indexOfFirst { it.modelAlias == chosen.modelAlias }.coerceAtLeast(0)
@@ -372,9 +388,12 @@ object ConfigWriter {
         val defaultModel = chosenGroup?.let {
             ConfigMerger.modelKey(it.alias, chosen.model)
         } ?: chosen.modelAlias
-        val merged = ConfigMerger.merge(
-            existing, managed, defaultModel, dropPrefixes = dropPrefixes,
-        )
+        // 不再传 dropPrefixes：删段正是 2.15.0 报错的根源。服务端/用户手写
+        // 到模型段里的能力元数据也随段一起原样保留。
+        val composed = ConfigMerger.merge(existing, managed, defaultModel)
+        // 2.16.1：登录态兜底。签名升级 / 配置重写时，服务端写入的 [auth] 等凭据段
+        // 必须原样保住，否则覆盖安装后会表现为「Kimi 账号掉了」。
+        val merged = ModelConfig.restoreCredentials(existing, composed)
 
         file.parentFile?.mkdirs()
         if (existing == merged) {
@@ -396,6 +415,49 @@ object ConfigWriter {
         )
         return true
     }
+
+    /**
+     * 2.16.0：切换默认模型。只改顶层 `default_model` 一行，不重建任何
+     * `[models.*]` 段、不重启运行环境，因此网页下拉里已有的模型全部保持可选。
+     *
+     * 若目标 key 历史上被 2.15.0 删掉了段（用户当前正遇到的报错状态），这里
+     * 顺手补一个可用段，实现自愈。返回是否真的写入了文件。
+     */
+    fun setDefaultModel(context: Context, modelKey: String, defaultContext: Int = 131072): Boolean {
+        if (modelKey.isBlank()) return false
+        val file = configFile(context)
+        if (!file.isFile) return false
+        val existing = readText(file)
+        var updated = ModelConfig.withDefaultModel(existing, modelKey)
+
+        // 自愈：确保这个 key 有段。补的段放在 managed 块结束标记之前，
+        // 否则下次 stripManagedBlock 会把它当成服务端内容留在块外。
+        val healed = ModelConfig.healMissingSection(existing, modelKey, defaultContext)
+        if (healed.isNotBlank()) {
+            val end = ConfigMerger.MANAGED_END
+            updated = if (updated.contains(end)) {
+                updated.replaceFirst(end, healed.trimEnd('\n') + "\n" + end)
+            } else {
+                updated.trimEnd('\n') + "\n\n" + ConfigMerger.MANAGED_START + "\n" +
+                    healed.trimEnd('\n') + "\n" + end + "\n"
+            }
+            Runtime.log("已自愈补齐模型段：$modelKey")
+        }
+        if (updated == existing) return false
+        file.parentFile?.mkdirs()
+        val tmp = File(file.parentFile, "config.toml.tmp")
+        tmp.writeText(updated)
+        if (!tmp.renameTo(file)) {
+            file.writeText(updated)
+            tmp.delete()
+        }
+        Runtime.log("默认模型已切换为 $modelKey（无需重启）")
+        return true
+    }
+
+    /** 当前 config 里已登记的全部 model key，供界面展示分组用。 */
+    fun registeredKeys(context: Context): Set<String> =
+        ModelConfig.modelKeys(readText(configFile(context)))
 
     private fun readText(file: File): String =
         if (file.isFile) runCatching { file.readText() }.getOrDefault("") else ""
