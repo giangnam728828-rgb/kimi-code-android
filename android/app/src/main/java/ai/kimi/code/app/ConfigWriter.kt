@@ -213,15 +213,18 @@ object Prefs {
  * Writes the App-owned part of `~/.kimi-code/config.toml`.
  *
  * Everything outside the marked block belongs to the server: the OAuth
- * credential from a Kimi sign-in, thinking-effort overrides, and models the
- * user added from inside the workspace. The old implementation replaced the
- * whole file on every launch, which logged users out whenever they saved a
- * model (saving triggers a restart). Now it merges, and only when its own
- * inputs actually changed.
+ * credential from a Kimi sign-in, thinking-effort capability metadata, and
+ * models the user added from inside the workspace. The old implementation
+ * replaced the whole file on every launch, which logged users out whenever
+ * they saved a model (saving triggers a restart). Now it merges, and only
+ * when its own inputs actually changed.
+ *
+ * The App writes only `default_effort` (a user preference). It must NOT write
+ * `support_efforts` / `off_effort` (capability metadata): declaring those for
+ * a custom endpoint makes the server reject `effort=off` -- see
+ * [ConfigMerger.effortLines].
  */
 object ConfigWriter {
-
-    private const val SUPPORTED_EFFORTS = """["low", "medium", "high"]"""
 
     fun configFile(context: Context): File =
         File(File(File(Paths.rootfs(context), "root"), ".kimi-code"), "config.toml")
@@ -258,7 +261,11 @@ object ConfigWriter {
         val chosen = active?.takeIf { c -> usable.any { it.modelAlias == c.modelAlias } }
             ?: usable.firstOrNull()
         return buildString {
-            append("v2|")
+            // v3: force one rewrite so any `support_efforts` written by 2.8.0
+            // (which breaks `effort=off` on custom models) is removed. Without
+            // a version bump applyIfConfigured() sees an unchanged signature
+            // and skips the rewrite, leaving the bad line in config.toml.
+            append("v3|")
             append(chosen?.modelAlias.orEmpty()).append('|')
             usable.sortedBy { it.modelAlias }.forEach {
                 append(it.modelAlias).append('|')
@@ -300,12 +307,10 @@ object ConfigWriter {
                 appendLine("provider = \"${ConfigMerger.escape(entry.alias)}\"")
                 appendLine("model = \"${ConfigMerger.escape(entry.model)}\"")
                 appendLine("max_context_size = ${entry.contextSize.coerceAtLeast(1)}")
-                // Declare the effort levels and pin the default one. Leaving it
-                // out (empty effort) keeps whatever the server/workspace chose.
-                if (entry.effort.isNotBlank()) {
-                    appendLine("support_efforts = $SUPPORTED_EFFORTS")
-                    appendLine("default_effort = \"${ConfigMerger.escape(entry.effort)}\"")
-                }
+                // Only a preference, never capability metadata. Writing
+                // `support_efforts` here made the server reject `effort=off`
+                // for custom models (off-needs-offeffort). See effortLines().
+                append(ConfigMerger.effortLines(entry.effort))
                 appendLine()
             }
         }

@@ -74,7 +74,7 @@
     <string name="save_pending_install">已保存，安装运行环境后自动生效</string>
     <string name="save_pending_start">已保存，下次启动服务时生效</string>
     <string name="field_effort">思考强度</string>
-    <string name="hint_effort">低 / 中 / 高；选「跟随服务端」则不改写工作台里的设置</string>
+    <string name="hint_effort">低 / 中 / 高；选「跟随服务端」则不改写工作台里的设置。仅设默认档位，关闭思考不会报错</string>
     <string name="save_need_key_new">请填写 API Key 与模型名称</string>
     <string name="model_added">已加入列表，点下面的「保存」后生效</string>
     <string name="model_default_pending">已设为默认模型，点下面的「保存」后生效</string>

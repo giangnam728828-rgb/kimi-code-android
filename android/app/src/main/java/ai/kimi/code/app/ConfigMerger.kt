@@ -49,6 +49,26 @@ object ConfigMerger {
     fun quoteKey(value: String): String =
         if (BARE_KEY.matches(value)) value else "\"${escape(value)}\""
 
+    /**
+     * Lines describing a model's thinking-effort preference.
+     *
+     * Deliberately emits ONLY `default_effort`, never `support_efforts` or
+     * `off_effort`. Those two are *capability metadata*: declaring
+     * `support_efforts` makes the server treat the model as "reasons by
+     * default", and it then rejects any request with `effort = 'off'` unless an
+     * `off_effort` is also declared (kimi-code `thinking.ts`, error
+     * `off-needs-offeffort`). For user-supplied custom endpoints we cannot know
+     * which wire value actually disables reasoning -- sending e.g. "none" can
+     * make the upstream API return 400. With no capability metadata the server
+     * falls back to `encode: 'silent'`, i.e. it simply omits the effort field,
+     * which is safe for every OpenAI-compatible endpoint.
+     *
+     * `default_effort` is a user preference, not a capability claim, so it is
+     * safe to write and still lets the chosen low/medium/high level take effect.
+     */
+    fun effortLines(effort: String): String =
+        if (effort.isBlank()) "" else "default_effort = \"${escape(effort)}\"\n"
+
     /** Section names present in a fragment of TOML text. */
     fun sectionNames(text: String): Set<String> = text.lineSequence()
         .mapNotNull { SECTION_HEADER.matchEntire(it)?.groupValues?.get(1)?.trim() }
