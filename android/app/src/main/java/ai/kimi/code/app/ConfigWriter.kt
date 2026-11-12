@@ -300,11 +300,11 @@ object ConfigWriter {
         val chosen = active?.takeIf { c -> usable.any { it.modelAlias == c.modelAlias } }
             ?: usable.firstOrNull()
         return buildString {
-            // v4: force one rewrite. 2.11.0 and earlier wrote a broken
-            // `Preset(...).id-2` alias for the second model of a provider, and
-            // only ever registered one model per provider. A bump is required
-            // or applyIfConfigured() would keep that stale config.toml forever.
-            append("v4|")
+            // v5: force one rewrite. 2.14.0 merged two model groups into a
+            // single providers.<alias>, so the web menu showed a flat list with
+            // no group separation. Bumping the signature makes this version
+            // regenerate config.toml once, splitting the groups again.
+            append("v5|")
             append(chosen?.modelAlias.orEmpty()).append('|')
             usable.sortedBy { it.modelAlias }.forEach {
                 append(it.modelAlias).append('|')
@@ -331,42 +331,49 @@ object ConfigWriter {
         val chosen = active?.takeIf { candidate -> usable.any { it.modelAlias == candidate.modelAlias } }
             ?: usable.first()
 
-        val managed = buildString {
-            for (entry in usable) {
-                val baseUrl = entry.baseUrl.ifBlank { entry.preset.baseUrl }
-                appendLine("[providers.${ConfigMerger.quoteKey(entry.alias)}]")
-                appendLine("type = \"${ConfigMerger.escape(entry.type)}\"")
-                if (baseUrl.isNotBlank()) {
-                    appendLine("base_url = \"${ConfigMerger.escape(baseUrl)}\"")
-                }
-                appendLine("api_key = \"${ConfigMerger.escape(entry.apiKey)}\"")
-                appendLine("default_model = \"${ConfigMerger.escape(entry.modelAlias)}\"")
-                appendLine()
-
-                for (id in entry.registeredModels) {
-                    appendLine("[models.${ConfigMerger.quoteKey(ConfigMerger.modelKey(entry.alias, id))}]")
-                    appendLine("provider = \"${ConfigMerger.escape(entry.alias)}\"")
-                    appendLine("model = \"${ConfigMerger.escape(id)}\"")
-                    appendLine("max_context_size = ${entry.contextSize.coerceAtLeast(1)}")
-                    // Only a preference, never capability metadata. Writing
-                    // `support_efforts` here made the server reject `effort=off`
-                    // for custom models (off-needs-offeffort). See effortLines().
-                    append(ConfigMerger.effortLines(entry.effort))
-                    appendLine()
-                }
-            }
+        // Each group owns exactly one [providers.<alias>] section and every
+        // model key is prefixed with that same alias, so the web UI renders
+        // one headed block per group instead of a single flat list.
+        val groups = ModelGroup.from(usable.mapIndexed { index, entry ->
+            ModelGroup.Spec(
+                alias = entry.alias,
+                title = entry.alias,
+                type = entry.type,
+                baseUrl = entry.baseUrl.ifBlank { entry.preset.baseUrl },
+                apiKey = entry.apiKey,
+                model = entry.model,
+                models = entry.models,
+                contextSize = entry.contextSize,
+                effort = entry.effort,
+                sourceIndex = index,
+            )
+        })
+        val problems = ModelGroup.validate(groups)
+        if (problems.isEmpty()) {
+            Runtime.log(
+                "模型分组校验通过：${groups.size} 个分组 / " +
+                    "${groups.sumOf { it.models.size }} 个模型，分组之间彼此隔开",
+            )
+        } else {
+            problems.forEach { Runtime.log("模型分组校验异常：$it") }
         }
+        val managed = ModelGroup.renderManaged(groups)
 
         val file = configFile(context)
         val existing = readText(file)
         // Any model previously registered under one of our aliases but no
         // longer selected must disappear, otherwise the web menu keeps offering
         // a model that config.toml no longer points at a working provider.
-        val dropPrefixes = usable.map {
-            "models.${ConfigMerger.quoteKey("${it.alias}/")}"
-        }.toSet()
+        val dropPrefixes = ModelGroup.dropPrefixes(groups)
+        // 顶层 default_model 必须指向一个真实存在的 model key。分组 alias 在
+        // 拆开重复项后可能带 -2 后缀，所以不能再用旧 entry 的 modelAlias。
+        val chosenIndex = usable.indexOfFirst { it.modelAlias == chosen.modelAlias }.coerceAtLeast(0)
+        val chosenGroup = groups.firstOrNull { it.sourceIndex == chosenIndex }
+        val defaultModel = chosenGroup?.let {
+            ConfigMerger.modelKey(it.alias, chosen.model)
+        } ?: chosen.modelAlias
         val merged = ConfigMerger.merge(
-            existing, managed, chosen.modelAlias, dropPrefixes = dropPrefixes,
+            existing, managed, defaultModel, dropPrefixes = dropPrefixes,
         )
 
         file.parentFile?.mkdirs()
@@ -383,7 +390,10 @@ object ConfigWriter {
             tmp.delete()
         }
         Prefs.setConfigSignature(context, signature(entries, active))
-        Runtime.log("已合并写入 ${usable.size} 个模型，默认 ${chosen.modelAlias}（保留服务端配置）")
+        Runtime.log(
+            "已合并写入 ${groups.size} 个分组 / ${groups.sumOf { it.models.size }} 个模型，" +
+                "默认 $defaultModel（保留服务端配置）",
+        )
         return true
     }
 

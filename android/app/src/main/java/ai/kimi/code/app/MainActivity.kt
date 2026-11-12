@@ -638,6 +638,12 @@ class MainActivity : Activity() {
     /** Index of the entry being edited, or null while adding a new one. */
     private var editingIndex: Int? = null
 
+    /**
+     * 正在编辑的分组里，除默认模型外额外登记的模型。
+     * 2.15.0 起「选择」一次可勾选多个，全部保存在同一个分组内。
+     */
+    private var editingModels: MutableList<String> = mutableListOf()
+
     /** Set while a config-triggered restart is in flight, so we return to the workspace. */
     private var reenterAfterRestart = false
 
@@ -834,42 +840,50 @@ class MainActivity : Activity() {
         modelListEmpty.visibility = if (entries.isEmpty()) View.VISIBLE else View.GONE
         entries.forEachIndexed { index, entry ->
             val isActive = entry.modelAlias == active?.modelAlias
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = android.view.Gravity.CENTER_VERTICAL
-                setPadding(dp(13), dp(12), dp(13), dp(12))
+            // 一个分组 = 一张卡片。卡片之间是留白，卡片内部按「组标题 / 组内模型」
+            // 分层，和网页「更多模型」里的分组形态一致，不再平铺成一列。
+            val group = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
                 setBackgroundResource(R.drawable.bg_card)
-                setOnClickListener { openEditor(index) }
             }
-            val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            column.addView(
-                textLabel(entry.model.ifBlank { entry.alias }, getColor(R.color.text_primary), 13f).apply {
-                    setTypeface(null, android.graphics.Typeface.BOLD)
-                },
-            )
-            column.addView(
-                textLabel(
-                    buildString {
+            group.addView(
+                TextView(this).apply {
+                    text = buildString {
                         append(entry.alias)
-                        append(" · ")
-                        append(ModelCatalog.describe(entry.model).vendor)
-                        append(" · ")
-                        append(entry.contextSize / 1024).append("K")
-                        val count = entry.registeredModels.size
-                        if (count > 1) append(" · ").append(count).append(" 个模型")
-                        if (isActive) append(" · ").append(getString(R.string.model_entry_default))
+                        append("  (").append(entry.registeredModels.size).append(" 个模型)")
+                        append(" · ").append(entry.contextSize / 1024).append("K")
                         if (isUnknownToCatalog(entry)) {
                             append(" · ").append(getString(R.string.model_entry_unknown_id))
                         }
-                    },
-                    getColor(R.color.text_muted),
-                    11f,
-                ),
+                    }
+                    textSize = 11f
+                    setTypeface(null, android.graphics.Typeface.BOLD)
+                    setTextColor(getColor(R.color.text_secondary))
+                    setBackgroundColor(Color.parseColor("#F2F3F5"))
+                    setPadding(dp(13), dp(8), dp(13), dp(8))
+                    setOnClickListener { openEditor(index) }
+                },
             )
-            row.addView(column, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-
+            entry.registeredModels.forEach { id ->
+                val isCurrent = id.equals(entry.model, ignoreCase = true)
+                group.addView(
+                    TextView(this).apply {
+                        text = if (isCurrent) "✓  $id   （默认）" else "     $id"
+                        textSize = 13f
+                        setTextColor(getColor(if (isCurrent) R.color.accent else R.color.text_primary))
+                        setPadding(dp(14), dp(9), dp(14), dp(9))
+                        setOnClickListener { switchModelInGroup(index, id) }
+                    },
+                )
+            }
+            val actions = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setGravity(android.view.Gravity.CENTER_VERTICAL)
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+            }
+            actions.addView(actionButton(getString(R.string.action_edit)) { openEditor(index) })
             if (!isActive) {
-                row.addView(
+                actions.addView(
                     actionButton(getString(R.string.action_set_default)) {
                         Prefs.setActiveEntry(this@MainActivity, index)
                         renderModelList()
@@ -877,18 +891,36 @@ class MainActivity : Activity() {
                         toast(getString(R.string.model_default_pending))
                     },
                 )
+            } else {
+                actions.addView(
+                    textLabel(getString(R.string.model_entry_default), getColor(R.color.accent), 12f),
+                )
             }
-            row.addView(
-                actionButton(getString(R.string.action_delete)) { deleteEntry(index) },
-            )
+            actions.addView(actionButton(getString(R.string.action_delete)) { deleteEntry(index) })
+            group.addView(actions)
             modelList.addView(
-                row,
+                group,
                 LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { bottomMargin = dp(8) },
+                ).apply { bottomMargin = dp(10) },
             )
         }
+    }
+
+    /** 把某个模型设为该分组的默认模型；不同分组互不影响。 */
+    private fun switchModelInGroup(index: Int, id: String) {
+        val entries = Prefs.load(this).toMutableList()
+        val entry = entries.getOrNull(index) ?: return
+        if (entry.model.equals(id, ignoreCase = true)) return
+        entries[index] = entry.copy(model = id)
+        Prefs.save(this, entries)
+        runCatching { ConfigWriter.write(this, entries, Prefs.activeEntry(this)) }
+            .onFailure { toast("写入配置失败：${it.message}") }
+        RuntimeService.restart(this)
+        renderModelList()
+        render()
+        toast("「$id」已设为分组「${entry.alias}」的默认模型")
     }
 
     /**
@@ -934,6 +966,7 @@ class MainActivity : Activity() {
 
     private fun openEditor(index: Int?) {
         editingIndex = index
+        editingModels = mutableListOf()
         editorPanel.visibility = View.VISIBLE
         editorHint.visibility = View.GONE
         advancedPanel.visibility = View.GONE
@@ -953,6 +986,7 @@ class MainActivity : Activity() {
             return
         }
         editorTitle.text = entry.alias
+        editingModels = entry.models.toMutableList()
         editAlias.setText(entry.alias)
         editBaseUrl.setText(entry.baseUrl.ifBlank { entry.preset.baseUrl })
         editApiKey.setText(entry.apiKey)
@@ -994,24 +1028,26 @@ class MainActivity : Activity() {
         }
 
         val effort = Prefs.EFFORTS[spinnerEffort.selectedItemPosition.coerceIn(0, Prefs.EFFORTS.lastIndex)].first
-        // Editing an entry must not drop the other models registered under it.
-        val existingModels = if (index != null && index in entries.indices) {
+        // 2.15.0: one picker can tick several models, all registered under the
+        // same group. When nothing was ticked, keep 2.14.0's whole-catalogue
+        // registration so the web dropdown stays complete.
+        val picked = editingModels.toList()
+        val previous = if (index != null && index in entries.indices) {
             entries[index].models
         } else {
             emptyList()
         }
-        // The web UI's "more models" menu lists one entry per `[models.*]`
-        // section in config.toml. Registering only the model the user picked is
-        // why every other model of the same endpoint was missing from that menu
-        // and had to be added by hand. Fold the whole fetched catalogue in so a
-        // single save makes them all switchable inside the web page.
         val catalog = catalogCache[catalogKey(baseUrl, apiKey, preset.type)].orEmpty()
-        val registered = ModelCatalog.registrationExtras(
-            current = model,
-            extra = existingModels,
-            catalog = catalog,
-            cap = Prefs.MAX_MODELS_PER_PROVIDER - 1,
-        )
+        val existingModels = if (picked.isNotEmpty()) {
+            picked
+        } else {
+            ModelCatalog.registrationExtras(
+                current = model,
+                extra = previous,
+                catalog = catalog,
+                cap = Prefs.MAX_MODELS_PER_PROVIDER - 1,
+            )
+        }
         val entry = Prefs.Entry(
             presetId = preset.id,
             alias = alias,
@@ -1020,14 +1056,14 @@ class MainActivity : Activity() {
             model = model,
             contextSize = contextSize,
             effort = effort,
-            models = registered,
+            models = existingModels,
         )
         if (index != null && index in entries.indices) entries[index] = entry else entries.add(entry)
         Prefs.save(this, entries)
         renderModelList()
         closeEditor()
         toast(
-            if (registered.size > 1) getString(R.string.model_added_all, registered.size + 1)
+            if (existingModels.size > 1) getString(R.string.model_added_all, existingModels.size + 1)
             else getString(R.string.model_added),
         )
     }
@@ -1067,27 +1103,36 @@ class MainActivity : Activity() {
             return
         }
         val key = catalogKey(baseUrl, apiKey, type)
-        ModelPickerDialog.show(
+        val current = editModel.text.toString().trim()
+        ModelMultiPickerDialog.show(
             activity = this,
             baseUrl = baseUrl,
             apiKey = apiKey,
             type = type,
-            current = editModel.text.toString().trim(),
+            already = (listOf(current) + editingModels).filter { it.isNotBlank() },
             cached = catalogCache[key] ?: emptyList(),
             onCache = { ids ->
                 catalogCache[key] = ids
                 setStatus(getString(R.string.model_fetched, ids.size))
             },
-            onPicked = { model -> applyPickedModel(model) },
+            onPicked = { picked -> applyPickedModels(picked) },
         )
     }
 
-    private fun applyPickedModel(model: CatalogModel) {
-        editModel.setText(model.id)
-        editContext.setText(model.contextSize.toString())
+    /** 一次把勾中的多个模型登记进当前分组，第一个作为该组默认模型。 */
+    private fun applyPickedModels(picked: List<CatalogModel>) {
+        val current = editModel.text.toString().trim()
+        val (defaultModel, rest) = ModelGroup.mergePicked(
+            current, editingModels, picked.map { it.id },
+        )
+        editingModels = rest.toMutableList()
+        if (defaultModel.isNotEmpty()) {
+            editModel.setText(defaultModel)
+            editContext.setText(ModelCatalog.describe(defaultModel).contextSize.toString())
+        }
         if (editAlias.text.toString().isBlank()) editAlias.setText(suggestAlias(currentPreset()))
         updateModelPick()
-        setStatus("已选择 ${model.id} · ${model.vendor}；点「验证模型可用」可提前确认")
+        setStatus("已勾选 ${picked.size} 个模型，全部登记在同一分组；保存后工作台按分组隔开显示")
     }
 
     /** Fetch on key / base-url blur, but never repeat a request we already made. */

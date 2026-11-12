@@ -267,15 +267,18 @@ object ConfigMerger {
     private fun compose(kept: List<List<String>>, managed: String, defaultModel: String): String {
         val out = mutableListOf<String>()
 
+        // removeLast()/removeFirst() are Java 21 List methods. Targeting API 26
+        // means they are missing on older Android runtimes (and on a JDK 20
+        // unit-test JVM), so use the always-available removeAt(lastIndex).
         val top = (kept.firstOrNull()?.toMutableList() ?: mutableListOf())
-        while (top.lastOrNull()?.isBlank() == true) top.removeLast()
+        while (top.lastOrNull()?.isBlank() == true) top.removeAt(top.lastIndex)
         if (top.isNotEmpty()) out.addAll(top)
         out.add("default_model = \"${escape(defaultModel)}\"")
         out.add("")
 
         kept.drop(1).forEach { lines ->
             val section = lines.toMutableList()
-            while (section.lastOrNull()?.isBlank() == true) section.removeLast()
+            while (section.lastOrNull()?.isBlank() == true) section.removeAt(section.lastIndex)
             if (section.isEmpty()) return@forEach
             out.addAll(section)
             out.add("")
