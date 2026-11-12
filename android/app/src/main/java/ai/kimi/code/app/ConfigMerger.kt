@@ -97,7 +97,13 @@ object ConfigMerger {
      *                     (without the marker comments)
      * @param defaultModel the App-selected default model alias (a top-level key)
      */
-    fun merge(existing: String, managedBlock: String, defaultModel: String): String {
+    fun merge(
+        existing: String,
+        managedBlock: String,
+        defaultModel: String,
+        dropSections: Set<String> = emptySet(),
+        dropPrefixes: Set<String> = emptySet(),
+    ): String {
         val owned = sectionNames(managedBlock)
         val managed = managedBlock.trimEnd('\n')
 
@@ -116,10 +122,16 @@ object ConfigMerger {
         val keptLines = if (legacyOnly) stripLegacyAppSections(original) else stripManagedBlock(original)
         val blocks = splitBlocks(keptLines)
 
-        // Drop only the sections the App is about to write again. Sections with
-        // other names -- including models the user added inside the workspace --
-        // are left untouched.
-        blocks.removeAll { it.header != null && it.header in owned }
+        // Drop the sections the App is about to write again, plus any stale
+        // section under an App-owned alias prefix (e.g. a model removed from a
+        // multi-model provider) and the broken `Preset(...)` keys written by
+        // <= 2.11.0. Sections with unrelated names -- including models the user
+        // added inside the workspace -- are left untouched.
+        blocks.removeAll { block ->
+            val header = block.header ?: return@removeAll false
+            header in owned || header in dropSections ||
+                dropPrefixes.any { header.startsWith(it) } || isBrokenLegacySection(header)
+        }
 
         // `default_model` is a top-level key: remove any previous one from the
         // top-level block so we never emit a duplicate TOML key.
@@ -142,6 +154,10 @@ object ConfigMerger {
         val kept = stripManagedBlock(original)
         val blocks = splitBlocks(kept)
         blocks.first().lines.removeAll { DEFAULT_MODEL_LINE.containsMatchIn(it) }
+        blocks.removeAll { block ->
+            val header = block.header ?: return@removeAll false
+            isBrokenLegacySection(header)
+        }
         return blocks.flatMap { it.lines }.joinToString("\n").trimEnd('\n') + "\n"
     }
 
@@ -176,6 +192,77 @@ object ConfigMerger {
         }
         return blocks.flatMap { it.lines }
     }
+
+    // ------------------------------------------------------------- alias / keys
+    //
+    // `providers.<alias>` is not just a TOML key: the web UI shows it as the
+    // group title in its "more models" menu, and it becomes the prefix of every
+    // `models."<alias>/<id>"` id sent back to the server. It therefore has to
+    // be short, ASCII-safe and stable.
+    //
+    // <= 2.11.0 built the second alias with `"$preset.id-$suffix"`, which Kotlin
+    // parses as `preset.toString() + ".id-2"` instead of `${preset.id}-2`. The
+    // resulting `Preset(id=custom, label=...).id-2` was written into TOML keys;
+    // the server could not resolve those ids and replied
+    // `Model "..." is not configured in config.toml` whenever a second model of
+    // the same provider was selected. These helpers repair and prevent that.
+
+    private val ALIAS_UNSAFE = Regex("[^a-z0-9_-]+")
+
+    /** Short, URL-safe alias. A broken `Preset(...)` leftover falls back to [fallback]. */
+    fun sanitizeAlias(input: String, fallback: String): String {
+        val raw = input.trim()
+        val safeFallback = sanitizeAliasRaw(fallback, "custom")
+        if (raw.isEmpty() || raw.length > 40 || isBrokenAlias(raw)) return safeFallback
+        return sanitizeAliasRaw(raw, safeFallback)
+    }
+
+    private fun sanitizeAliasRaw(raw: String, fallback: String): String =
+        raw.lowercase().replace(ALIAS_UNSAFE, "-").trim('-').take(24).ifBlank { fallback }
+
+    fun isBrokenAlias(alias: String): Boolean =
+        alias.contains("Preset(", ignoreCase = true) ||
+            alias.contains("contextSize", ignoreCase = true)
+
+    /** Unique short alias. Never interpolates an object into a string template. */
+    fun uniqueAlias(base: String, used: Set<String>): String {
+        val clean = sanitizeAlias(base, base)
+        if (clean !in used) return clean
+        var suffix = 2
+        while ("$clean-$suffix" in used) suffix++
+        return "$clean-$suffix"
+    }
+
+    /**
+     * Deterministic cleanup of saved aliases: a broken one becomes the preset
+     * id, then duplicates get numeric suffixes. Applied on every load so old
+     * data heals without a migration step.
+     */
+    fun cleanAliases(aliases: List<String>, fallbacks: List<String>): List<String> {
+        val used = HashSet<String>()
+        return aliases.mapIndexed { index, alias ->
+            val base = sanitizeAlias(alias, fallbacks.getOrElse(index) { "custom" })
+            var candidate = base
+            var suffix = 2
+            while (!used.add(candidate)) {
+                candidate = "$base-$suffix"
+                suffix++
+            }
+            candidate
+        }
+    }
+
+    /** Model ids are case-insensitive in the web UI; keep generated keys lowercase. */
+    fun modelKey(alias: String, model: String): String =
+        "${sanitizeAlias(alias, "custom")}/${model.trim().lowercase()}"
+
+    fun modelSectionKey(alias: String, model: String): String =
+        "models." + quoteKey(modelKey(alias, model))
+
+    fun providerSectionKey(alias: String): String = "providers." + quoteKey(alias)
+
+    /** Sections written by the broken alias; safe to drop on upgrade. */
+    fun isBrokenLegacySection(header: String): Boolean = isBrokenAlias(header)
 
     private fun compose(kept: List<List<String>>, managed: String, defaultModel: String): String {
         val out = mutableListOf<String>()

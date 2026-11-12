@@ -50,7 +50,7 @@
 
     <string name="settings_hint">填入 API Key 后会自动拉取可用模型；选好模型保存，重启后生效。</string>
     <string name="field_provider">模型服务商</string>
-    <string name="field_provider_name">名称（配置里的 provider key）</string>
+    <string name="field_provider_name">名称（网页「更多模型」里显示，可自己改短）</string>
     <string name="field_base_url">接口地址</string>
     <string name="field_api_key">API Key</string>
     <string name="field_model">模型（从列表选，不用手填）</string>

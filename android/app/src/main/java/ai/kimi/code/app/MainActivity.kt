@@ -80,8 +80,10 @@ class MainActivity : Activity() {
     private lateinit var termScroll: ScrollView
     private lateinit var termInput: EditText
 
-    private lateinit var webContainer: View
+    private lateinit var webContainer: FrameLayout
     private lateinit var webView: WebView
+    /** In-workspace shortcut: change models / API key without leaving the chat. */
+    private lateinit var quickFab: TextView
     private lateinit var webLoading: ProgressBar
     private lateinit var webErrorBox: View
     private lateinit var webErrorTitle: TextView
@@ -178,6 +180,7 @@ class MainActivity : Activity() {
         webErrorTitle = findViewById(R.id.webErrorTitle)
         webErrorDetail = findViewById(R.id.webErrorDetail)
         findViewById<View>(R.id.webErrorRetry).setOnClickListener { reloadWorkspace() }
+        setupQuickFab()
 
         btnPrimary.setOnClickListener { onPrimaryAction() }
         btnRestart.setOnClickListener {
@@ -477,6 +480,51 @@ class MainActivity : Activity() {
         }
     }
 
+    /** A small native chip over the WebView: the chat page never has to be left. */
+    private fun setupQuickFab() {
+        quickFab = TextView(this).apply {
+            text = "设置模型"
+            setTextColor(getColor(R.color.white))
+            textSize = 12f
+            gravity = android.view.Gravity.CENTER
+            maxLines = 1
+            maxWidth = dp(170)
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            setBackgroundResource(R.drawable.bg_chip_accent)
+            val pad = dp(13)
+            setPadding(pad, dp(9), pad, dp(9))
+            alpha = 0.95f
+            visibility = View.GONE
+            setOnClickListener {
+                QuickSettingsDialog.show(
+                    this@MainActivity,
+                    onRefresh = { reloadWorkspace() },
+                    onChanged = { syncQuickFab() },
+                )
+            }
+        }
+        val lp = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+        ).apply {
+            gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
+            bottomMargin = dp(16)
+            marginEnd = dp(12)
+        }
+        webContainer.addView(quickFab, lp)
+    }
+
+    private fun syncQuickFab() {
+        if (!::quickFab.isInitialized) return
+        val active = Prefs.activeEntry(this)
+        quickFab.text = when {
+            active == null || !active.isConfigured -> "设置模型"
+            active.registeredModels.size > 1 -> "${active.model} · ${active.registeredModels.size} 个"
+            else -> active.model
+        }
+        quickFab.visibility = if (workspaceVisible) View.VISIBLE else View.GONE
+    }
+
     private fun openWorkspace() {
         if (Runtime.phase != Runtime.Phase.READY || Runtime.workspaceUrl.isEmpty()) {
             toast("服务还没就绪")
@@ -495,6 +543,7 @@ class MainActivity : Activity() {
         if (reload) reloadWorkspace()
         shell.visibility = View.GONE
         webContainer.visibility = View.VISIBLE
+        syncQuickFab()
         applyImmersive(true)
     }
 
@@ -565,6 +614,7 @@ class MainActivity : Activity() {
         pageSettings.visibility = if (currentPage == R.id.pageSettings) View.VISIBLE else View.GONE
         pageData.visibility = if (currentPage == R.id.pageData) View.VISIBLE else View.GONE
         pageTerminal.visibility = if (currentPage == R.id.pageTerminal) View.VISIBLE else View.GONE
+        syncQuickFab()
         applyImmersive(false)
     }
 
@@ -786,11 +836,13 @@ class MainActivity : Activity() {
             column.addView(
                 textLabel(
                     buildString {
+                        append(entry.alias)
+                        append(" · ")
                         append(ModelCatalog.describe(entry.model).vendor)
                         append(" · ")
                         append(entry.contextSize / 1024).append("K")
-                        append(" · ")
-                        append(entry.type)
+                        val count = entry.registeredModels.size
+                        if (count > 1) append(" · ").append(count).append(" 个模型")
                         if (isActive) append(" · ").append(getString(R.string.model_entry_default))
                         if (isUnknownToCatalog(entry)) {
                             append(" · ").append(getString(R.string.model_entry_unknown_id))
@@ -847,14 +899,14 @@ class MainActivity : Activity() {
             setOnClickListener { onClick() }
         }
 
-    /** Alias that does not collide with an already configured entry. */
-    private fun suggestAlias(preset: Prefs.Preset): String {
-        val entries = Prefs.load(this)
-        if (entries.none { it.alias == preset.id }) return preset.id
-        var suffix = 2
-        while (entries.any { it.alias == "$preset.id-$suffix" }) suffix++
-        return "$preset.id-$suffix"
-    }
+    /**
+     * Short alias that does not collide with an already configured entry.
+     * 2.11.0 used `"$preset.id-$suffix"`, which Kotlin parses as
+     * `preset.toString() + ".id-2"` and produced a `Preset(...)` monster in
+     * both TOML keys and the web UI's model menu. Always interpolate a String.
+     */
+    private fun suggestAlias(preset: Prefs.Preset): String =
+        ConfigMerger.uniqueAlias(preset.id, Prefs.load(this).map { it.alias }.toSet())
 
     private fun fillEditor(preset: Prefs.Preset, alias: String) {
         editAlias.setText(alias)
@@ -908,7 +960,13 @@ class MainActivity : Activity() {
 
     private fun confirmEntry() {
         val preset = currentPreset()
-        val alias = editAlias.text.toString().trim().ifBlank { suggestAlias(preset) }
+        val index = editingIndex
+        val entries = Prefs.load(this).toMutableList()
+        val others = entries.filterIndexed { i, _ -> i != index }.map { it.alias }.toSet()
+        val alias = ConfigMerger.uniqueAlias(
+            ConfigMerger.sanitizeAlias(editAlias.text.toString().trim(), suggestAlias(preset)),
+            others,
+        )
         val apiKey = editApiKey.text.toString().trim()
         val baseUrl = editBaseUrl.text.toString().trim().ifBlank { preset.baseUrl }
         val model = editModel.text.toString().trim()
@@ -922,7 +980,12 @@ class MainActivity : Activity() {
         }
 
         val effort = Prefs.EFFORTS[spinnerEffort.selectedItemPosition.coerceIn(0, Prefs.EFFORTS.lastIndex)].first
-        val entries = Prefs.load(this).toMutableList()
+        // Editing an entry must not drop the other models registered under it.
+        val existingModels = if (index != null && index in entries.indices) {
+            entries[index].models
+        } else {
+            emptyList()
+        }
         val entry = Prefs.Entry(
             presetId = preset.id,
             alias = alias,
@@ -931,8 +994,8 @@ class MainActivity : Activity() {
             model = model,
             contextSize = contextSize,
             effort = effort,
+            models = existingModels,
         )
-        val index = editingIndex
         if (index != null && index in entries.indices) entries[index] = entry else entries.add(entry)
         Prefs.save(this, entries)
         renderModelList()
@@ -1528,6 +1591,7 @@ class MainActivity : Activity() {
             getString(R.string.value_model_empty)
         }
         valueWorkspace.text = Prefs.workspace(this)
+        syncQuickFab()
 
         val logVersion = Runtime.logVersion
         if (logVersion != lastRenderedLogVersion) {

@@ -13,10 +13,11 @@ android {
         targetSdk = 28
         // Must stay strictly above whatever is installed on the device:
         // Android refuses to overwrite an APK with a lower/equal versionCode.
-        // 2.11.0: fix the restart freeze and chat messages disappearing.
-        // Must stay strictly above 2.10.0 / 23 to overwrite the installed build.
-        versionCode = 24
-        versionName = "2.11.0"
+        // 2.12.0: repair the broken provider alias, allow a custom short name,
+        // register several models under one API key, and edit them in-workspace.
+        // Must stay strictly above 2.11.0 / 24 to overwrite the installed build.
+        versionCode = 25
+        versionName = "2.12.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

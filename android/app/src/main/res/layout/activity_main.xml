@@ -594,6 +594,28 @@
                         android:layout_height="44dp"
                         android:layout_marginTop="4dp" />
 
+                    <!-- Short, user-editable name. The web UI shows it as the
+                         group title in its "more models" menu, so it must be
+                         visible by default (not buried in advanced options). -->
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:text="@string/field_provider_name"
+                        android:textColor="@color/text_primary"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+
+                    <EditText
+                        android:id="@+id/editAlias"
+                        android:layout_width="match_parent"
+                        android:layout_height="44dp"
+                        android:hint="@string/hint_provider_name"
+                        android:importantForAutofill="no"
+                        android:inputType="textNoSuggestions"
+                        android:singleLine="true"
+                        android:textSize="13sp" />
+
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
@@ -733,25 +755,6 @@
                         android:layout_height="wrap_content"
                         android:orientation="vertical"
                         android:visibility="gone">
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
-                            android:text="@string/field_provider_name"
-                            android:textColor="@color/text_primary"
-                            android:textSize="12sp"
-                            android:textStyle="bold" />
-
-                        <EditText
-                            android:id="@+id/editAlias"
-                            android:layout_width="match_parent"
-                            android:layout_height="44dp"
-                            android:hint="@string/hint_provider_name"
-                            android:importantForAutofill="no"
-                            android:inputType="textNoSuggestions"
-                            android:singleLine="true"
-                            android:textSize="13sp" />
 
                         <TextView
                             android:layout_width="match_parent"

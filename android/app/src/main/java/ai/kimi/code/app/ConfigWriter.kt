@@ -32,6 +32,9 @@ object Prefs {
 
     const val DEFAULT_WORKSPACE = "/root/workspace"
 
+    /** Cap the menu length: a gateway can expose hundreds of ids. */
+    const val MAX_MODELS_PER_PROVIDER = 40
+
     /** Access protocol of a configured provider, mirroring `providers.<name>.type`. */
     data class Preset(
         val id: String,
@@ -60,13 +63,27 @@ object Prefs {
         val contextSize: Int,
         /** `default_effort` written into the model section; empty = don't touch it. */
         val effort: String = "",
+        /** Other model ids registered under the same provider / API key. */
+        val models: List<String> = emptyList(),
     ) {
         val preset: Preset get() = preset(presetId)
         val type: String get() = preset.type
         val isConfigured: Boolean get() = apiKey.isNotBlank() && model.isNotBlank()
 
-        /** Alias used by `default_model` and `-m`, i.e. `models."<alias>/<model>"`. */
-        val modelAlias: String get() = "$alias/$model"
+        /** Alias used by `default_model`, i.e. `models."<alias>/<model>"`. */
+        val modelAlias: String get() = ConfigMerger.modelKey(alias, model)
+
+        /**
+         * Every model id this provider registers in config.toml. One provider
+         * (one API key + base URL) can now serve several models, so the web UI's
+         * "more models" menu can switch between them without re-saving.
+         */
+        val registeredModels: List<String>
+            get() = (models + model)
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .take(Prefs.MAX_MODELS_PER_PROVIDER)
     }
 
     val PRESETS = listOf(
@@ -84,8 +101,22 @@ object Prefs {
         val sp = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
         val raw = sp.getString(KEY_ACTIVE, null)
         if (raw == null) return migrateLegacySettings(sp)
-        return PrefsCodec.decode(raw, PRESETS.first().contextSize).map {
-            Entry(it.presetId, it.alias, it.apiKey, it.baseUrl, it.model, it.contextSize, it.effort)
+        val decoded = PrefsCodec.decode(raw, PRESETS.first().contextSize)
+        // Heal aliases written by <= 2.11.0 (`Preset(...).id-2`) in place. This
+        // is deterministic, so every caller sees the same short alias without a
+        // one-off migration that could race a restart.
+        val aliases = ConfigMerger.cleanAliases(decoded.map { it.alias }, decoded.map { it.presetId })
+        return decoded.mapIndexed { index, r ->
+            Entry(
+                r.presetId,
+                aliases[index],
+                r.apiKey,
+                r.baseUrl,
+                r.model,
+                r.contextSize,
+                r.effort,
+                PrefsCodec.splitModels(r.models),
+            )
         }
     }
 
@@ -140,7 +171,10 @@ object Prefs {
     }
 
     private fun encodeEntries(entries: List<Entry>): String = PrefsCodec.encode(entries.map {
-        PrefsCodec.Record(it.presetId, it.alias, it.apiKey, it.baseUrl, it.model, it.contextSize, it.effort)
+        PrefsCodec.Record(
+            it.presetId, it.alias, it.apiKey, it.baseUrl, it.model, it.contextSize,
+            it.effort, PrefsCodec.joinModels(it.models),
+        )
     })
 
     /**
@@ -261,11 +295,11 @@ object ConfigWriter {
         val chosen = active?.takeIf { c -> usable.any { it.modelAlias == c.modelAlias } }
             ?: usable.firstOrNull()
         return buildString {
-            // v3: force one rewrite so any `support_efforts` written by 2.8.0
-            // (which breaks `effort=off` on custom models) is removed. Without
-            // a version bump applyIfConfigured() sees an unchanged signature
-            // and skips the rewrite, leaving the bad line in config.toml.
-            append("v3|")
+            // v4: force one rewrite. 2.11.0 and earlier wrote a broken
+            // `Preset(...).id-2` alias for the second model of a provider, and
+            // only ever registered one model per provider. A bump is required
+            // or applyIfConfigured() would keep that stale config.toml forever.
+            append("v4|")
             append(chosen?.modelAlias.orEmpty()).append('|')
             usable.sortedBy { it.modelAlias }.forEach {
                 append(it.modelAlias).append('|')
@@ -274,6 +308,7 @@ object ConfigWriter {
                 append(it.apiKey).append('|')
                 append(it.contextSize).append('|')
                 append(it.effort).append('|')
+                append(it.registeredModels.joinToString(",")).append('|')
             }
         }
     }
@@ -303,21 +338,31 @@ object ConfigWriter {
                 appendLine("default_model = \"${ConfigMerger.escape(entry.modelAlias)}\"")
                 appendLine()
 
-                appendLine("[models.${ConfigMerger.quoteKey(entry.modelAlias)}]")
-                appendLine("provider = \"${ConfigMerger.escape(entry.alias)}\"")
-                appendLine("model = \"${ConfigMerger.escape(entry.model)}\"")
-                appendLine("max_context_size = ${entry.contextSize.coerceAtLeast(1)}")
-                // Only a preference, never capability metadata. Writing
-                // `support_efforts` here made the server reject `effort=off`
-                // for custom models (off-needs-offeffort). See effortLines().
-                append(ConfigMerger.effortLines(entry.effort))
-                appendLine()
+                for (id in entry.registeredModels) {
+                    appendLine("[models.${ConfigMerger.quoteKey(ConfigMerger.modelKey(entry.alias, id))}]")
+                    appendLine("provider = \"${ConfigMerger.escape(entry.alias)}\"")
+                    appendLine("model = \"${ConfigMerger.escape(id)}\"")
+                    appendLine("max_context_size = ${entry.contextSize.coerceAtLeast(1)}")
+                    // Only a preference, never capability metadata. Writing
+                    // `support_efforts` here made the server reject `effort=off`
+                    // for custom models (off-needs-offeffort). See effortLines().
+                    append(ConfigMerger.effortLines(entry.effort))
+                    appendLine()
+                }
             }
         }
 
         val file = configFile(context)
         val existing = readText(file)
-        val merged = ConfigMerger.merge(existing, managed, chosen.modelAlias)
+        // Any model previously registered under one of our aliases but no
+        // longer selected must disappear, otherwise the web menu keeps offering
+        // a model that config.toml no longer points at a working provider.
+        val dropPrefixes = usable.map {
+            "models.${ConfigMerger.quoteKey("${it.alias}/")}"
+        }.toSet()
+        val merged = ConfigMerger.merge(
+            existing, managed, chosen.modelAlias, dropPrefixes = dropPrefixes,
+        )
 
         file.parentFile?.mkdirs()
         if (existing == merged) {
