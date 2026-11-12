@@ -122,6 +122,28 @@ object ProotRuntime {
         process = null
     }
 
+    /**
+     * Synchronous variant used before a restart. `stop()` only fires destroy()
+     * and returns immediately, so the old server is usually still listening
+     * when the next worker probes the port. Waiting here keeps the port (and
+     * therefore the WebView origin) stable across restarts.
+     */
+    fun stopAndWait(timeoutMs: Long) {
+        stopping = true
+        val current = process
+        process = null
+        if (current == null) return
+        runCatching { current.destroy() }
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (current.isAlive && System.currentTimeMillis() < deadline) {
+            runCatching { Thread.sleep(100) }
+        }
+        if (current.isAlive) runCatching { current.destroyForcibly() }
+        // Give the kernel a moment to tear down the listening socket and reap
+        // proot's children, which can outlive the Java Process object.
+        runCatching { Thread.sleep(300) }
+    }
+
     fun shouldRestart(): Boolean = !stopping
 
     private fun pumpOutput(target: Process) {

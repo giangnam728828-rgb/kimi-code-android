@@ -21,6 +21,8 @@ object Prefs {
     const val KEY_WORKSPACE = "workspace"
     const val KEY_ACTIVE = "active_entry"
     const val KEY_ACTIVE_INDEX = "active_index"
+    const val KEY_CONFIG_SIGNATURE = "config_signature"
+    const val KEY_FIXED_PORT = "fixed_port"
 
     private const val LEGACY_PROVIDER = "provider"
     private const val LEGACY_BASE_URL = "base_url"
@@ -40,6 +42,14 @@ object Prefs {
         val contextSize: Int,
     )
 
+    /** Thinking-effort choices. An empty value leaves the server default alone. */
+    val EFFORTS = listOf(
+        "" to "跟随服务端",
+        "low" to "低",
+        "medium" to "中",
+        "high" to "高",
+    )
+
     /** One configured model endpoint. [alias] is the `[providers.<alias>]` key. */
     data class Entry(
         val presetId: String,
@@ -48,6 +58,8 @@ object Prefs {
         val baseUrl: String,
         val model: String,
         val contextSize: Int,
+        /** `default_effort` written into the model section; empty = don't touch it. */
+        val effort: String = "",
     ) {
         val preset: Preset get() = preset(presetId)
         val type: String get() = preset.type
@@ -70,8 +82,11 @@ object Prefs {
 
     fun load(context: Context): List<Entry> {
         val sp = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
-        sp.getString(KEY_ACTIVE, null)?.let { return decodeEntries(it) }
-        return migrateLegacySettings(sp)
+        val raw = sp.getString(KEY_ACTIVE, null)
+        if (raw == null) return migrateLegacySettings(sp)
+        return PrefsCodec.decode(raw, PRESETS.first().contextSize).map {
+            Entry(it.presetId, it.alias, it.apiKey, it.baseUrl, it.model, it.contextSize, it.effort)
+        }
     }
 
     /**
@@ -124,31 +139,40 @@ object Prefs {
             .apply()
     }
 
-    private fun encodeEntries(entries: List<Entry>): String = entries.joinToString("\u001E") { entry ->
-        listOf(
-            entry.presetId,
-            entry.alias,
-            entry.apiKey,
-            entry.baseUrl,
-            entry.model,
-            entry.contextSize.toString(),
-        ).joinToString("\u001F")
+    private fun encodeEntries(entries: List<Entry>): String = PrefsCodec.encode(entries.map {
+        PrefsCodec.Record(it.presetId, it.alias, it.apiKey, it.baseUrl, it.model, it.contextSize, it.effort)
+    })
+
+    /**
+     * Fingerprint of the App-owned config. When it is unchanged the launcher
+     * must not touch `config.toml` at all, otherwise every proot restart would
+     * overwrite whatever the server or the workspace wrote into that file.
+     */
+    fun configSignature(context: Context): String =
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+            .getString(KEY_CONFIG_SIGNATURE, "").orEmpty()
+
+    fun setConfigSignature(context: Context, value: String) {
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit()
+            .putString(KEY_CONFIG_SIGNATURE, value)
+            .apply()
     }
 
-    private fun decodeEntries(raw: String): List<Entry> = raw.split("\u001E")
-        .filter { it.isNotBlank() }
-        .mapNotNull { record ->
-            val fields = record.split("\u001F")
-            if (fields.size < 6) return@mapNotNull null
-            Entry(
-                presetId = fields[0],
-                alias = fields[1],
-                apiKey = fields[2],
-                baseUrl = fields[3],
-                model = fields[4],
-                contextSize = fields[5].toIntOrNull() ?: PRESETS.first().contextSize,
-            )
-        }
+    /**
+     * The workspace WebView keeps login state and session lists in localStorage,
+     * which is scoped to the origin (`host:port`). Reusing the same port across
+     * restarts is therefore essential: a port change looks like a brand new,
+     * empty site to the web UI.
+     */
+    fun fixedPort(context: Context): Int =
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+            .getInt(KEY_FIXED_PORT, 0)
+
+    fun setFixedPort(context: Context, port: Int) {
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit()
+            .putInt(KEY_FIXED_PORT, port)
+            .apply()
+    }
 
     private fun flag(context: Context, key: String, fallback: Boolean): Boolean =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean(key, fallback)
@@ -180,92 +204,150 @@ object Prefs {
             .apply()
     }
 
-    /**
-     * Plugins are managed by the agent itself under `$KIMI_CODE_HOME/plugins`
-     * (`installed.json` + `managed/<id>`), so the app only reads that directory
-     * to report what is installed; installing happens through the workspace.
-     */
+    /** Plugins are managed by the agent itself under `$KIMI_CODE_HOME/plugins`. */
     fun pluginsDir(context: Context): File =
         File(File(File(Paths.rootfs(context), "root"), ".kimi-code"), "plugins")
 }
 
 /**
- * Writes `~/.kimi-code/config.toml` inside the rootfs so the agent runs on the
- * model the user picked, with no manual terminal setup.
+ * Writes the App-owned part of `~/.kimi-code/config.toml`.
  *
- * The layout follows the engine's own `providers` / `models` sections: every
- * entry becomes one provider plus one model alias named `<alias>/<model>`, and
- * `default_model` points at the active alias.
+ * Everything outside the marked block belongs to the server: the OAuth
+ * credential from a Kimi sign-in, thinking-effort overrides, and models the
+ * user added from inside the workspace. The old implementation replaced the
+ * whole file on every launch, which logged users out whenever they saved a
+ * model (saving triggers a restart). Now it merges, and only when its own
+ * inputs actually changed.
  */
 object ConfigWriter {
 
-    private const val MARKER = "# Generated by the Kimi Code Android app"
+    private const val SUPPORTED_EFFORTS = """["low", "medium", "high"]"""
 
     fun configFile(context: Context): File =
         File(File(File(Paths.rootfs(context), "root"), ".kimi-code"), "config.toml")
 
+    /** Called on every proot start. No-op unless the App-owned config changed. */
     fun applyIfConfigured(context: Context): Boolean {
         val entries = Prefs.load(context).filter { it.isConfigured }
         if (entries.isEmpty()) {
             Runtime.log("尚未配置模型，可在设置页填入 API Key")
             return false
         }
-        return runCatching { write(context, entries, Prefs.activeEntry(context)) }
+        val active = Prefs.activeEntry(context)
+        val signature = signature(entries, active)
+        val file = configFile(context)
+        val existing = readText(file)
+        val alreadyMerged = existing.contains(ConfigMerger.MANAGED_START)
+        if (file.isFile && alreadyMerged && Prefs.configSignature(context) == signature) {
+            // Inputs unchanged: do not rewrite, so server-side state survives.
+            return true
+        }
+        return runCatching { write(context, entries, active) }
             .onFailure { Runtime.log("写入配置失败: ${it.message}") }
             .isSuccess
     }
 
-    fun write(context: Context, entries: List<Prefs.Entry>, active: Prefs.Entry?) {
+    /**
+     * Stable fingerprint of the App-owned inputs. Both [applyIfConfigured] and
+     * [write] must compute it the same way, otherwise every restart would look
+     * like a change and rewrite the file. Filtering/choosing lives here so the
+     * caller's list shape cannot make the two disagree.
+     */
+    fun signature(entries: List<Prefs.Entry>, active: Prefs.Entry?): String {
+        val usable = entries.filter { it.isConfigured }
+        val chosen = active?.takeIf { c -> usable.any { it.modelAlias == c.modelAlias } }
+            ?: usable.firstOrNull()
+        return buildString {
+            append("v2|")
+            append(chosen?.modelAlias.orEmpty()).append('|')
+            usable.sortedBy { it.modelAlias }.forEach {
+                append(it.modelAlias).append('|')
+                append(it.type).append('|')
+                append(it.baseUrl).append('|')
+                append(it.apiKey).append('|')
+                append(it.contextSize).append('|')
+                append(it.effort).append('|')
+            }
+        }
+    }
+
+    /**
+     * Merge the generated sections into the existing file, preserving all other
+     * content. Writes atomically so the server never reads a half-written TOML.
+     *
+     * @return true when the file actually changed (i.e. a restart is warranted)
+     */
+    fun write(context: Context, entries: List<Prefs.Entry>, active: Prefs.Entry?): Boolean {
         val usable = entries.filter { it.isConfigured }
         require(usable.isNotEmpty()) { "没有任何可用的模型配置" }
 
         val chosen = active?.takeIf { candidate -> usable.any { it.modelAlias == candidate.modelAlias } }
             ?: usable.first()
 
-        val text = buildString {
-            appendLine(MARKER)
-            appendLine("default_model = \"${escape(chosen.modelAlias)}\"")
-            appendLine()
-
+        val managed = buildString {
             for (entry in usable) {
                 val baseUrl = entry.baseUrl.ifBlank { entry.preset.baseUrl }
-                appendLine("[providers.${quoteKey(entry.alias)}]")
-                appendLine("type = \"${escape(entry.type)}\"")
+                appendLine("[providers.${ConfigMerger.quoteKey(entry.alias)}]")
+                appendLine("type = \"${ConfigMerger.escape(entry.type)}\"")
                 if (baseUrl.isNotBlank()) {
-                    appendLine("base_url = \"${escape(baseUrl)}\"")
+                    appendLine("base_url = \"${ConfigMerger.escape(baseUrl)}\"")
                 }
-                appendLine("api_key = \"${escape(entry.apiKey)}\"")
-                appendLine("default_model = \"${escape(entry.modelAlias)}\"")
+                appendLine("api_key = \"${ConfigMerger.escape(entry.apiKey)}\"")
+                appendLine("default_model = \"${ConfigMerger.escape(entry.modelAlias)}\"")
                 appendLine()
 
-                appendLine("[models.${quoteKey(entry.modelAlias)}]")
-                appendLine("provider = \"${escape(entry.alias)}\"")
-                appendLine("model = \"${escape(entry.model)}\"")
+                appendLine("[models.${ConfigMerger.quoteKey(entry.modelAlias)}]")
+                appendLine("provider = \"${ConfigMerger.escape(entry.alias)}\"")
+                appendLine("model = \"${ConfigMerger.escape(entry.model)}\"")
                 appendLine("max_context_size = ${entry.contextSize.coerceAtLeast(1)}")
+                // Declare the effort levels and pin the default one. Leaving it
+                // out (empty effort) keeps whatever the server/workspace chose.
+                if (entry.effort.isNotBlank()) {
+                    appendLine("support_efforts = $SUPPORTED_EFFORTS")
+                    appendLine("default_effort = \"${ConfigMerger.escape(entry.effort)}\"")
+                }
                 appendLine()
             }
         }
 
         val file = configFile(context)
+        val existing = readText(file)
+        val merged = ConfigMerger.merge(existing, managed, chosen.modelAlias)
+
         file.parentFile?.mkdirs()
-        file.writeText(text)
-        Runtime.log("已写入 ${usable.size} 个模型配置，默认 ${chosen.modelAlias}（${chosen.type}）")
+        if (existing == merged) {
+            Prefs.setConfigSignature(context, signature(entries, active))
+            Runtime.log("模型配置未变化，保留现有 config.toml")
+            return false
+        }
+
+        val tmp = File(file.parentFile, "config.toml.tmp")
+        tmp.writeText(merged)
+        if (!tmp.renameTo(file)) {
+            file.writeText(merged)
+            tmp.delete()
+        }
+        Prefs.setConfigSignature(context, signature(entries, active))
+        Runtime.log("已合并写入 ${usable.size} 个模型，默认 ${chosen.modelAlias}（保留服务端配置）")
+        return true
     }
 
-    /** Removes a previous app-generated config so the login flow starts clean. */
+    private fun readText(file: File): String =
+        if (file.isFile) runCatching { file.readText() }.getOrDefault("") else ""
+
+    /**
+     * Removes only the App-owned block. The old implementation deleted the
+     * whole file, which also deleted the login credential.
+     */
     fun clearGenerated(context: Context) {
         val file = configFile(context)
         if (!file.isFile) return
-        val head = runCatching { file.readLines().firstOrNull() }.getOrNull()
-        if (head?.contains("Generated by the Kimi Code Android app") == true) {
-            file.delete()
-            Runtime.log("已清除 App 写入的模型配置")
-        }
+        val existing = readText(file)
+        if (!existing.contains(ConfigMerger.MANAGED_START) &&
+            existing.lines().firstOrNull()?.trim() != ConfigMerger.LEGACY_MARKER) return
+        val cleaned = ConfigMerger.removeManaged(existing)
+        file.writeText(cleaned)
+        Prefs.setConfigSignature(context, "")
+        Runtime.log("已移除 App 写入的模型配置段，其它配置保留")
     }
-
-    private fun quoteKey(value: String): String =
-        if (value.matches(Regex("[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)*"))) value else "\"${escape(value)}\""
-
-    private fun escape(value: String): String =
-        value.replace("\\", "\\\\").replace("\"", "\\\"")
 }

@@ -13,6 +13,11 @@ import android.os.IBinder
 /**
  * Owns the whole local stack: install the rootfs on first run, launch proot,
  * wait for the server, expose the token, and keep it alive.
+ *
+ * Restarts are the delicate part. The WebView keeps login state and session
+ * lists in localStorage, scoped to the `host:port` origin, so a restart must
+ * reuse the exact same port. A [generation] counter also makes sure a stale
+ * worker can never spawn a second server or kill the fresh one.
  */
 class RuntimeService : Service() {
 
@@ -23,6 +28,8 @@ class RuntimeService : Service() {
 
         private const val CHANNEL_ID = "kimi_runtime"
         private const val NOTIFICATION_ID = 42
+        private const val PORT_RELEASE_TIMEOUT_MS = 10_000L
+        private const val STOP_TIMEOUT_MS = 6_000L
 
         fun start(context: Context) {
             val intent = Intent(context, RuntimeService::class.java).setAction(ACTION_START)
@@ -39,6 +46,10 @@ class RuntimeService : Service() {
         }
 
         fun restart(context: Context) {
+            // Flip the phase synchronously: startService delivers the intent
+            // asynchronously, and without this the UI still sees READY and can
+            // open the workspace against the process that is about to die.
+            Runtime.update(Runtime.Phase.STARTING, "正在重启本地服务", "", -1)
             val intent = Intent(context, RuntimeService::class.java).setAction(ACTION_RESTART)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -50,6 +61,9 @@ class RuntimeService : Service() {
 
     @Volatile private var wantStop = false
     @Volatile private var worker: Thread? = null
+
+    /** Bumped on every stop/restart; workers only act while theirs is current. */
+    @Volatile private var generation = 0L
     private var port = Paths.DEFAULT_PORT
 
     override fun onCreate() {
@@ -61,35 +75,46 @@ class RuntimeService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                generation++
                 wantStop = true
-                ProotRuntime.stop()
+                ProotRuntime.stopAndWait(STOP_TIMEOUT_MS)
+                worker?.let { runCatching { it.interrupt(); it.join(2000) } }
                 Runtime.update(Runtime.Phase.STOPPED, "已停止", "点击启动重新运行")
                 stopForegroundCompat()
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_RESTART -> {
+                generation++
                 wantStop = true
-                ProotRuntime.stop()
-                worker?.let { runCatching { it.join(3000) } }
-                wantStop = false
+                // Wait for the old process to actually die BEFORE probing the
+                // port. The previous implementation only called destroy() and
+                // reset wantStop immediately, so the dying server still held
+                // 58630 and pickPort() silently moved the workspace to 58631.
+                ProotRuntime.stopAndWait(STOP_TIMEOUT_MS)
+                worker?.let { runCatching { it.interrupt(); it.join(2000) } }
+                startWorker()
+                return START_STICKY
             }
             else -> Unit
         }
 
-        if (worker?.isAlive != true) {
-            wantStop = false
-            worker = Thread({ runLoop() }, "kimi-runtime").apply {
-                isDaemon = true
-                start()
-            }
-        }
+        if (worker?.isAlive != true) startWorker()
         return START_STICKY
     }
 
-    private fun runLoop() {
+    private fun startWorker() {
+        wantStop = false
+        val epoch = generation
+        worker = Thread({ runLoop(epoch) }, "kimi-runtime").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun runLoop(epoch: Long) {
         var consecutiveFailures = 0
-        while (!wantStop) {
+        while (!wantStop && epoch == generation) {
             try {
                 if (!Paths.isRuntimeInstalled(this)) {
                     Runtime.update(Runtime.Phase.INSTALLING, "首次安装运行环境", "需要下载约 87 MB", 0)
@@ -115,15 +140,16 @@ class RuntimeService : Service() {
                 notify("运行中 · 端口 $port")
                 consecutiveFailures = 0
 
-                while (!wantStop && process.isAlive) {
+                while (!wantStop && epoch == generation && process.isAlive) {
                     Thread.sleep(1500)
                 }
-                if (wantStop) break
+                if (wantStop || epoch != generation) break
                 Runtime.log("服务已退出，3 秒后自动重启")
                 Thread.sleep(3000)
             } catch (error: InterruptedException) {
                 break
             } catch (error: Throwable) {
+                if (epoch != generation) break
                 consecutiveFailures++
                 val message = error.message ?: error.javaClass.simpleName
                 Runtime.log("启动失败：$message")
@@ -137,7 +163,8 @@ class RuntimeService : Service() {
                 runCatching { Thread.sleep(4000) }
             }
         }
-        ProotRuntime.stop()
+        // A stale worker must not kill the process owned by the new generation.
+        if (epoch == generation) ProotRuntime.stop()
     }
 
     /**
@@ -164,13 +191,36 @@ class RuntimeService : Service() {
         }
     }
 
+    /**
+     * Reuse the port from the previous run so the WebView origin never changes.
+     * If it is still held (usually the process we just stopped), wait for it to
+     * be released instead of hopping to the next port.
+     */
     private fun pickPort(): Int {
+        val pinned = Prefs.fixedPort(this)
+        if (pinned in 1024..65535) {
+            if (waitForPortFree(pinned, PORT_RELEASE_TIMEOUT_MS)) return pinned
+            Runtime.log("端口 $pinned 仍被占用，尝试寻找可用端口")
+        }
         var candidate = Paths.DEFAULT_PORT
         repeat(20) {
-            if (!ProotRuntime.isPortOpen(candidate)) return candidate
+            if (!ProotRuntime.isPortOpen(candidate)) {
+                Prefs.setFixedPort(this, candidate)
+                return candidate
+            }
             candidate++
         }
+        Prefs.setFixedPort(this, Paths.DEFAULT_PORT)
         return Paths.DEFAULT_PORT
+    }
+
+    private fun waitForPortFree(port: Int, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (!ProotRuntime.isPortOpen(port)) return true
+            runCatching { Thread.sleep(200) }
+        }
+        return !ProotRuntime.isPortOpen(port)
     }
 
     private fun notify(text: String) {
@@ -222,8 +272,9 @@ class RuntimeService : Service() {
     }
 
     override fun onDestroy() {
+        generation++
         wantStop = true
-        ProotRuntime.stop()
+        ProotRuntime.stopAndWait(STOP_TIMEOUT_MS)
         super.onDestroy()
     }
 

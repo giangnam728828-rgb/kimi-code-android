@@ -556,6 +556,7 @@ class MainActivity : Activity() {
     private lateinit var editApiKey: EditText
     private lateinit var editModel: EditText
     private lateinit var editContext: EditText
+    private lateinit var spinnerEffort: Spinner
     private lateinit var saveHint: TextView
     private lateinit var checkAutoEnter: CheckBox
     private lateinit var checkSwipeBack: CheckBox
@@ -564,6 +565,9 @@ class MainActivity : Activity() {
 
     /** Index of the entry being edited, or null while adding a new one. */
     private var editingIndex: Int? = null
+
+    /** Set while a config-triggered restart is in flight, so we return to the workspace. */
+    private var reenterAfterRestart = false
 
     private fun setupSettingsPage() {
         modelList = findViewById(R.id.modelList)
@@ -577,7 +581,13 @@ class MainActivity : Activity() {
         editApiKey = findViewById(R.id.editApiKey)
         editModel = findViewById(R.id.editModel)
         editContext = findViewById(R.id.editContext)
+        spinnerEffort = findViewById(R.id.spinnerEffort)
         saveHint = findViewById(R.id.saveHint)
+        spinnerEffort.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            Prefs.EFFORTS.map { it.second },
+        )
         checkAutoEnter = findViewById(R.id.checkAutoEnter)
         checkSwipeBack = findViewById(R.id.checkSwipeBack)
         checkLan = findViewById(R.id.checkLan)
@@ -714,6 +724,7 @@ class MainActivity : Activity() {
         editModel.setText(preset.model)
         editContext.setText(preset.contextSize.toString())
         editApiKey.setText("")
+        spinnerEffort.setSelection(0, false)
     }
 
     private fun openEditor(index: Int?) {
@@ -739,6 +750,8 @@ class MainActivity : Activity() {
         editContext.setText(entry.contextSize.toString())
         val position = Prefs.PRESETS.indexOfFirst { it.id == entry.presetId }
         spinnerProvider.setSelection(position.coerceAtLeast(0), false)
+        val effortIndex = Prefs.EFFORTS.indexOfFirst { it.first == entry.effort }
+        spinnerEffort.setSelection(effortIndex.coerceAtLeast(0), false)
     }
 
     private fun closeEditor() {
@@ -762,6 +775,7 @@ class MainActivity : Activity() {
         }
 
         val preset = Prefs.PRESETS[spinnerProvider.selectedItemPosition.coerceIn(0, Prefs.PRESETS.lastIndex)]
+        val effort = Prefs.EFFORTS[spinnerEffort.selectedItemPosition.coerceIn(0, Prefs.EFFORTS.lastIndex)].first
         val entries = Prefs.load(this).toMutableList()
         val entry = Prefs.Entry(
             presetId = preset.id,
@@ -770,6 +784,7 @@ class MainActivity : Activity() {
             baseUrl = baseUrl,
             model = model,
             contextSize = contextSize,
+            effort = effort,
         )
         val index = editingIndex
         if (index == null) entries.add(entry) else entries[index] = entry
@@ -816,11 +831,22 @@ class MainActivity : Activity() {
             saveHint.text = "保存失败：${written.exceptionOrNull()?.message}"
             return
         }
+        val changed = written.getOrDefault(false)
         saveHint.setTextColor(getColor(R.color.ok))
-        saveHint.text = getString(R.string.save_apply)
-        if (Paths.isRuntimeInstalled(this)) {
-            loadedUrl = null
-            RuntimeService.restart(this)
+        when {
+            !changed -> saveHint.text = getString(R.string.save_unchanged)
+            !Paths.isRuntimeInstalled(this) -> saveHint.text = getString(R.string.save_pending_install)
+            Runtime.phase != Runtime.Phase.READY -> saveHint.text = getString(R.string.save_pending_start)
+            else -> {
+                // Restarting is only needed when the config actually changed.
+                // The service now reuses the same port and the config keeps the
+                // login credential, so the WebView origin and localStorage
+                // survive and the user stays logged in with their chats intact.
+                saveHint.text = getString(R.string.save_apply)
+                reenterAfterRestart = true
+                loadedUrl = null
+                RuntimeService.restart(this)
+            }
         }
         render()
     }
@@ -1085,7 +1111,9 @@ class MainActivity : Activity() {
                     Runtime.log("恢复失败：${error.message}")
                     backupStatus.text = getString(R.string.restore_failed, error.message ?: "未知错误")
                 }
-                RuntimeService.start(this)
+                // Mirror startBackup(): only resume the service if it was
+                // running before, otherwise restoring would silently start it.
+                if (wasRunning) RuntimeService.start(this)
             }
         }.apply { isDaemon = true }.start()
     }
@@ -1200,7 +1228,18 @@ class MainActivity : Activity() {
         applyKeepAwake()
 
         val ready = Runtime.phase == Runtime.Phase.READY && Runtime.workspaceUrl.isNotEmpty()
-        if (ready && !workspaceVisible && Prefs.autoEnter(this) && currentPage == R.id.pageHome) {
+        val restartSettled = reenterAfterRestart &&
+            Runtime.phase != Runtime.Phase.STARTING &&
+            Runtime.phase != Runtime.Phase.INSTALLING
+        if (restartSettled) {
+            // Consume the flag whether the restart succeeded or failed, so it
+            // cannot fire much later on an unrelated render.
+            reenterAfterRestart = false
+            if (ready && !workspaceVisible && currentPage == R.id.pageSettings) {
+                Runtime.log("配置已生效，自动返回工作台")
+                openWorkspace()
+            }
+        } else if (ready && !workspaceVisible && Prefs.autoEnter(this) && currentPage == R.id.pageHome) {
             Runtime.log("已开启自动进入，直接打开工作台")
             openWorkspace()
         }
