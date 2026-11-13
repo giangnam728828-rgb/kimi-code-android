@@ -257,4 +257,29 @@
     <string name="provider_pref_awake">工作台常亮</string>
     <string name="provider_pref_restart_hint">已保存，回主界面重启一次服务后生效</string>
     <string name="provider_remove_model_note">已从清单移除；网页下拉重载后不再主推该模型</string>
+
+    <!-- 2.16.2 · ETA 风格统一 BottomSheet + 草稿制 + 改名生效 + 全 App 动效 -->
+    <string name="provider_draft_hint">尚未保存的新供应商，点「保存」后才会出现在列表；直接返回会丢弃</string>
+    <string name="provider_draft_save">保存并新增</string>
+    <string name="provider_edit_model_title">编辑模型</string>
+    <string name="provider_add_model_title">新增模型</string>
+    <string name="provider_field_display_name">展示名称</string>
+    <string name="provider_field_model_id">Model ID</string>
+    <string name="provider_field_context_tokens">内容长度上限（tokens）</string>
+    <string name="provider_tokens_about">约 %1$s tokens</string>
+    <string name="provider_context_custom_hint">选择常用大小或手动填写，用于判断何时自动压缩</string>
+    <string name="provider_thinking">支援思考</string>
+    <string name="provider_thinking_override">已覆盖模型自动能力</string>
+    <string name="provider_thinking_auto">自动：不支援或未知</string>
+    <string name="provider_effort_note">只选模型或闸道实际支援的档位</string>
+    <string name="provider_restore_auto">恢复自动</string>
+    <string name="provider_remove_model_btn">删除模型</string>
+    <string name="provider_custom_default_name">自订模型</string>
+    <string name="provider_model_id_required">请先填写 Model ID</string>
+    <string name="provider_display_name_help">这个名字会写进配置，工作台下拉里显示</string>
+    <string name="provider_name_help">名称会写进配置，保存后工作台刷新即可看到</string>
+    <string name="provider_draft_discarded">已丢弃未保存的供应商</string>
+    <string name="provider_restored_auto">已恢复自动推断</string>
+    <string name="provider_btn_cancel">取消</string>
+    <string name="provider_btn_save">储存</string>
 </resources>

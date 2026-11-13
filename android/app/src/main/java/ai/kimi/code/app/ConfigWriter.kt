@@ -312,7 +312,10 @@ object ConfigWriter {
             // `Model "..." is not configured in config.toml`. Bumping the
             // signature rebuilds the managed block once and absorbs every
             // historical section back in, healing already-broken installs.
-            append("v6|")
+            // v7: 2.16.2 把供应商名称与模型展示名称写进 config.toml
+            // （[providers.*].name / [models.*].display_name）。改签名触发一次
+            // 重写并纳入名字，用户在设定页改名保存后工作台刷新即可生效。
+            append("v7|")
             append(chosen?.modelAlias.orEmpty()).append('|')
             usable.sortedBy { it.modelAlias }.forEach {
                 append(it.modelAlias).append('|')
@@ -373,12 +376,20 @@ object ConfigWriter {
         // `is not configured`。把本次未重新生成的历史段原样并回 managed 块，
         // 保证网页能选到的每个 model key 都有对应的 [models.*] 段。
         val generatedKeys = groups.flatMap { it.modelKeys() }.toSet()
-        val preserved = ModelConfig.preservedSections(existing, generatedKeys)
-        // 逐模型参数（上下文 / 思考强度）来自新的供应商管理页；旧配置没有
-        // ProviderStore 数据时为空 map，行为与 2.15.0 一致。
-        val tuning = runCatching { ProviderStore.tuningFor(ProviderStore.load(context)) }
-            .getOrDefault(emptyMap())
-        val managed = ModelGroup.renderManaged(groups, tuning) +
+        // 2.16.2：改过名的旧 alias 名下的历史段要丢弃，否则会留下指向不存在
+        // provider 的悬空段（网页下拉里点它会报错）。改名本身就是用户主动
+        // 重命名，且保存后会刷新工作台，因此不受「只增不删」保护。
+        val retired = runCatching { ProviderStore.retiredAliases(context) }
+            .getOrDefault(emptySet())
+        val preserved = ModelConfig.preservedSections(existing, generatedKeys, retired)
+        // 逐模型参数（上下文 / 思考强度 / 展示名称）来自新的供应商管理页；
+        // 旧配置没有 ProviderStore 数据时为空 map，行为与 2.15.0 一致。
+        val store = runCatching { ProviderStore.load(context) }.getOrDefault(emptyList())
+        val tuning = runCatching { ProviderStore.tuningFor(store) }.getOrDefault(emptyMap())
+        // 2.16.2：供应商名称 + 模型展示名称写进 config.toml，改名后刷新工作台
+        // 即可生效（网页 toProtocolModel 读 display_name）。
+        val providerNames = runCatching { ProviderStore.namesFor(store) }.getOrDefault(emptyMap())
+        val managed = ModelGroup.renderManaged(groups, tuning, providerNames) +
             if (preserved.isBlank()) "" else "\n" + preserved
 
         // 顶层 default_model 必须指向一个真实存在的 model key。分组 alias 在

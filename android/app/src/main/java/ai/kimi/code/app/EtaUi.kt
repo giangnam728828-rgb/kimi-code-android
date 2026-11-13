@@ -133,6 +133,7 @@ object EtaUi {
         isClickable = true
         isFocusable = true
         setOnClickListener { onClick() }
+        EtaMotion.press(context, this)
         addView(TextView(context).apply {
             text = icon
             textSize = 18f
@@ -215,8 +216,9 @@ object EtaUi {
                 gravity = Gravity.CENTER
                 setTypeface(null, Typeface.BOLD)
                 setPadding(context.dp(10), context.dp(11), context.dp(10), context.dp(11))
-                setOnClickListener { onSelect(index) }
+                setOnClickListener { onSelect(index); EtaMotion.pop(context, this) }
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                EtaMotion.press(context, this)
             }.also { row.addView(it) }
         }
         val select: (Int) -> Unit = { active ->
@@ -238,6 +240,7 @@ object EtaUi {
             background = rounded(ACCENT, 13)
             setPadding(context.dp(14), context.dp(14), context.dp(14), context.dp(14))
             setOnClickListener { onClick() }
+            EtaMotion.press(context, this)
         }
 
     fun linkRow(context: Context, label: String, value: String, onClick: () -> Unit): LinearLayout =
@@ -246,6 +249,7 @@ object EtaUi {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(context.dp(4), context.dp(16), context.dp(4), context.dp(16))
             setOnClickListener { onClick() }
+            EtaMotion.press(context, this)
             addView(TextView(context).apply {
                 text = label
                 textSize = 16f

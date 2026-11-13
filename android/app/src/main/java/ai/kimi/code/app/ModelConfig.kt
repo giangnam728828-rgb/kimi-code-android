@@ -35,6 +35,8 @@ object ModelConfig {
         val modelId: String,
         val contextSize: Int,
         val effort: String = "",
+        /** 2.16.2：网页工作台显示的模型名（toProtocolModel 读 display_name）。 */
+        val displayName: String = "",
     )
 
     /** 2.16.0：每个模型的独立设置，用于覆盖分组默认值。 */
@@ -43,6 +45,8 @@ object ModelConfig {
         val effort: String,
         val reasoning: Boolean = false,
         val enabled: Boolean = true,
+        /** 2.16.2：模型展示名，写进 [models.*] 段的 display_name。 */
+        val displayName: String = "",
     )
 
     /** 去掉 TOML key 外层引号与常见转义。 */
@@ -87,6 +91,11 @@ object ModelConfig {
         appendLine("[models.${ConfigMerger.quoteKey(spec.key)}]")
         appendLine("provider = \"${ConfigMerger.escape(spec.alias)}\"")
         appendLine("model = \"${ConfigMerger.escape(spec.modelId)}\"")
+        // 2.16.2：网页 toProtocolModel 读 display_name 作为下拉里显示的名字。
+        // 只在非空时写，保持历史段与旧单测行为不变。
+        if (spec.displayName.isNotBlank()) {
+            appendLine("display_name = \"${ConfigMerger.escape(spec.displayName)}\"")
+        }
         appendLine("max_context_size = ${spec.contextSize.coerceAtLeast(1)}")
         append(ConfigMerger.effortLines(spec.effort))
     }
@@ -98,7 +107,17 @@ object ModelConfig {
      * key，它就必须继续存在，否则切换过去必然报 not configured。段内可能含有
      * 服务端写入的能力元数据（如 support_efforts），原样保留最安全。
      */
-    fun preservedSections(existing: String, generatedKeys: Set<String>): String {
+    fun preservedSections(
+        existing: String,
+        generatedKeys: Set<String>,
+        /**
+         * 2.16.2：已经改名的 alias。它名下的历史 `[models.*]` 段必须丢弃 ——
+         * 否则这些段会指向一个已经不存在的 `[providers.<alias>]`，变成悬空段
+         * （网页下拉里点它会直接失败）。改名不在「只增不删」的保护范围内，
+         * 因为它是用户主动重命名，且保存后会强制刷新工作台。
+         */
+        retiredAliases: Set<String> = emptySet(),
+    ): String {
         if (existing.isBlank()) return ""
         val lines = existing.lines()
         val out = mutableListOf<String>()
@@ -123,7 +142,8 @@ object ModelConfig {
             if (header != null) {
                 flush()
                 val key = modelKeyOf(header)
-                keep = key != null && key !in generatedKeys
+                val retired = key != null && retiredAliases.any { key.startsWith("$it/") }
+                keep = key != null && key !in generatedKeys && !retired
                 current = mutableListOf(line)
             } else {
                 if (current == null) current = mutableListOf()

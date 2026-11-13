@@ -207,7 +207,11 @@ object ConfigMerger {
     // `Model "..." is not configured in config.toml` whenever a second model of
     // the same provider was selected. These helpers repair and prevent that.
 
-    private val ALIAS_UNSAFE = Regex("[^a-z0-9_-]+")
+    // 2.16.2：别名允许 Unicode 字母/数字（含中文）。工作台的分组标题只能来自
+    // `[providers.<alias>]` 的段名，后端没有独立的显示名字段；只保留 ASCII 会把
+    // 「深度求索」这种名字清成 custom，改名等于没改。TOML 的非裸键由 quoteKey
+    // 自动加引号，中文段名完全合法。
+    private val ALIAS_UNSAFE = Regex("[^\\p{L}\\p{N}_-]+")
 
     /** Short, URL-safe alias. A broken `Preset(...)` leftover falls back to [fallback]. */
     fun sanitizeAlias(input: String, fallback: String): String {

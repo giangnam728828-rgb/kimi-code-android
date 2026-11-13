@@ -62,6 +62,9 @@ object ProviderStore {
     const val PRESETS_FILE = "provider_store"
     private const val KEY_DATA = "providers_json"
 
+    /** 2.16.2：改过名的旧 alias，其历史 `[models.*]` 段必须清掉。 */
+    private const val KEY_RETIRED = "retired_aliases_json"
+
     // ------------------------------------------------------------- catalog
 
     data class CatalogEntry(
@@ -261,10 +264,54 @@ object ProviderStore {
                     effort = m.effort,
                     reasoning = m.reasoning,
                     enabled = m.enabled,
+                    // 2.16.2：模型展示名称，写进 [models.*] 段的 display_name。
+                    displayName = m.displayName,
                 )
             }
         }
         return out
+    }
+
+    /**
+     * 2.16.2：alias -> 供应商显示名称。写进 [providers.*] 段的 name 字段，
+     * 供 config.toml 记录用户在设定页起的名字（分组标题仍取 alias，保持模型
+     * key 稳定，不触碰「只增不删」红线）。
+     */
+    fun namesFor(providers: List<ProviderSpec>): Map<String, String> =
+        providers.associate { it.alias to it.name }
+
+    // ------------------------------------------------------- retired aliases
+
+    /** 已改名的旧别名集合。用于在重建 config.toml 时清掉悬空的历史模型段。 */
+    fun retiredAliases(context: Context): Set<String> {
+        val raw = context.getSharedPreferences(PRESETS_FILE, Context.MODE_PRIVATE)
+            .getString(KEY_RETIRED, null)
+        if (raw.isNullOrBlank()) return emptySet()
+        return runCatching {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() }.toSet()
+        }.getOrDefault(emptySet())
+    }
+
+    /** 记录一个改名后作废的 alias；同时把这个 alias 从退役表里排除（防止重名复用）。 */
+    fun retireAlias(context: Context, oldAlias: String, newAlias: String) {
+        if (oldAlias.isBlank() || oldAlias == newAlias) return
+        val next = retiredAliases(context).toMutableSet()
+        next.add(oldAlias)
+        next.remove(newAlias)
+        context.getSharedPreferences(PRESETS_FILE, Context.MODE_PRIVATE).edit()
+            .putString(KEY_RETIRED, JSONArray(next.toList()).toString())
+            .apply()
+    }
+
+    /** 新建供应商占用了一个曾退役的 alias 时，把它从退役表移出，避免误删新段。 */
+    fun reviveAlias(context: Context, alias: String) {
+        val cur = retiredAliases(context)
+        if (alias !in cur) return
+        val next = cur - alias
+        context.getSharedPreferences(PRESETS_FILE, Context.MODE_PRIVATE).edit()
+            .putString(KEY_RETIRED, JSONArray(next.toList()).toString())
+            .apply()
     }
 
     fun uniqueAlias(base: String, used: Set<String>): String =

@@ -109,11 +109,19 @@ object ModelGroup {
     fun renderManaged(
         groups: List<Group>,
         tuning: Map<String, ModelConfig.ModelTuning> = emptyMap(),
+        providerNames: Map<String, String> = emptyMap(),
     ): String = buildString {
         groups.forEachIndexed { index, group ->
             if (index > 0) appendLine()
             appendLine("# --- 分组 ${group.title} (${group.alias}) ---")
             appendLine("[providers.${ConfigMerger.quoteKey(group.alias)}]")
+            // 2.16.2：把用户在设定页填的供应商名称写进 config.toml，作为
+            // provider 的可读元数据；分组标题仍由 alias 决定（保持模型 key 稳定，
+            // 不触碰「只增不删」红线）。
+            val pname = providerNames[group.alias].orEmpty()
+            if (pname.isNotBlank()) {
+                appendLine("name = \"${ConfigMerger.escape(pname)}\"")
+            }
             appendLine("type = \"${ConfigMerger.escape(group.type)}\"")
             if (group.baseUrl.isNotBlank()) {
                 appendLine("base_url = \"${ConfigMerger.escape(group.baseUrl)}\"")
@@ -132,6 +140,12 @@ object ModelGroup {
                 appendLine("[${ConfigMerger.modelSectionKey(group.alias, id)}]")
                 appendLine("provider = \"${ConfigMerger.escape(group.alias)}\"")
                 appendLine("model = \"${ConfigMerger.escape(id)}\"")
+                // 2.16.2：网页 toProtocolModel 读 display_name 作为下拉显示名；
+                // 模型「展示名称」改名后，刷新工作台即可生效。
+                val display = own?.displayName.orEmpty()
+                if (display.isNotBlank() && display != id) {
+                    appendLine("display_name = \"${ConfigMerger.escape(display)}\"")
+                }
                 appendLine("max_context_size = ${(own?.contextSize ?: group.contextSize).coerceAtLeast(1)}")
                 append(ConfigMerger.effortLines(own?.effort ?: group.effort))
                 appendLine()

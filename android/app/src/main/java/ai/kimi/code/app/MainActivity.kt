@@ -228,9 +228,11 @@ class MainActivity : Activity() {
         }
     }
 
-    /** 2.16.0：Eta 风格的模型供应商两级管理页。 */
+    /** 2.16.0：Eta 风格的模型供应商两级管理页。2.16.2 加统一转场动效。 */
     private fun openProviderPage() {
         startActivity(Intent(this, ProviderActivity::class.java))
+        @Suppress("DEPRECATION")
+        overridePendingTransition(R.anim.eta_slide_in, 0)
     }
 
     private fun switchPage(pageId: Int) {
@@ -248,6 +250,13 @@ class MainActivity : Activity() {
         pageTerminal.visibility = if (pageId == R.id.pageTerminal) View.VISIBLE else View.GONE
         pageData.visibility = if (pageId == R.id.pageData) View.VISIBLE else View.GONE
         hideWorkspace()
+        // 2.16.2 全 App 动效：切页时目标页淡入上移，和弹层/列表同一套节奏
+        EtaMotion.enter(this, when (pageId) {
+            R.id.pagePlugins -> pagePlugins
+            R.id.pageTerminal -> pageTerminal
+            R.id.pageData -> pageData
+            else -> pageHome
+        }, fromDp = 12f)
 
         val pages = listOf(
             R.id.pageHome,
@@ -310,22 +319,37 @@ class MainActivity : Activity() {
     }
 
     private fun promptWorkspace() {
-        val input = EditText(this).apply {
-            setText(Prefs.workspace(this@MainActivity))
-            inputType = InputType.TYPE_CLASS_TEXT
-            setSelectAllOnFocus(true)
-        }
-        android.app.AlertDialog.Builder(this)
-            .setTitle(R.string.row_workspace)
-            .setMessage("容器内的绝对路径，重启服务后生效")
-            .setView(input)
-            .setPositiveButton(android.R.string.ok) { _, _ ->
-                Prefs.setWorkspace(this, input.text.toString())
-                render()
-                toast("已保存，重启服务后生效")
+        // 2.16.2：与全 App 其它弹层统一为 Eta 风格 BottomSheet
+        EtaSheet.show(this, getString(R.string.row_workspace), tall = false) { sheet ->
+            sheet.body.addView(TextView(this).apply {
+                text = "容器内的绝对路径，重启服务后生效"
+                textSize = 13f
+                setTextColor(getColor(R.color.text_muted))
+                setPadding(0, 0, 0, dp(12))
+            })
+            val input = EditText(this).apply {
+                setText(Prefs.workspace(this@MainActivity))
+                inputType = InputType.TYPE_CLASS_TEXT
+                setSelectAllOnFocus(true)
+                textSize = 15f
+                background = EtaUi.rounded(EtaUi.FIELD, 14)
+                setPadding(dp(16), dp(13), dp(16), dp(13))
             }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            sheet.body.addView(input, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ))
+            val (row, _) = EtaSheet.dualButtons(
+                this, getString(R.string.action_cancel), getString(R.string.action_save),
+                onCancel = { sheet.dismiss() },
+                onConfirm = {
+                    Prefs.setWorkspace(this, input.text.toString())
+                    sheet.dismiss()
+                    render()
+                    toast("已保存，重启服务后生效")
+                },
+            )
+            sheet.footer.addView(row)
+        }
     }
 
     private fun saveLog() {
@@ -861,78 +885,12 @@ class MainActivity : Activity() {
     }
 
     private fun renderModelList() {
-        val entries = Prefs.load(this)
-        val active = Prefs.activeEntry(this)
+        // 2.16.2：设置页已被「模型供应商」页（ProviderActivity）整体取代，
+        // 旧的「分组卡片 + 多选 + 手动输入」UI 不再可达。这里保留空实现，
+        // 让散落各处的调用点保持原控制流，但不再每次回前台都重建几十个
+        // 不可见的 View —— 既彻底去掉旧界面，也少一份主线程开销。
         modelList.removeAllViews()
-        modelListEmpty.visibility = if (entries.isEmpty()) View.VISIBLE else View.GONE
-        entries.forEachIndexed { index, entry ->
-            val isActive = entry.modelAlias == active?.modelAlias
-            // 一个分组 = 一张卡片。卡片之间是留白，卡片内部按「组标题 / 组内模型」
-            // 分层，和网页「更多模型」里的分组形态一致，不再平铺成一列。
-            val group = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setBackgroundResource(R.drawable.bg_card)
-            }
-            group.addView(
-                TextView(this).apply {
-                    text = buildString {
-                        append(entry.alias)
-                        append("  (").append(entry.registeredModels.size).append(" 个模型)")
-                        append(" · ").append(entry.contextSize / 1024).append("K")
-                        if (isUnknownToCatalog(entry)) {
-                            append(" · ").append(getString(R.string.model_entry_unknown_id))
-                        }
-                    }
-                    textSize = 11f
-                    setTypeface(null, android.graphics.Typeface.BOLD)
-                    setTextColor(getColor(R.color.text_secondary))
-                    setBackgroundColor(Color.parseColor("#F2F3F5"))
-                    setPadding(dp(13), dp(8), dp(13), dp(8))
-                    setOnClickListener { openEditor(index) }
-                },
-            )
-            entry.registeredModels.forEach { id ->
-                val isCurrent = id.equals(entry.model, ignoreCase = true)
-                group.addView(
-                    TextView(this).apply {
-                        text = if (isCurrent) "✓  $id   （默认）" else "     $id"
-                        textSize = 13f
-                        setTextColor(getColor(if (isCurrent) R.color.accent else R.color.text_primary))
-                        setPadding(dp(14), dp(9), dp(14), dp(9))
-                        setOnClickListener { switchModelInGroup(index, id) }
-                    },
-                )
-            }
-            val actions = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setGravity(android.view.Gravity.CENTER_VERTICAL)
-                setPadding(dp(10), dp(4), dp(10), dp(4))
-            }
-            actions.addView(actionButton(getString(R.string.action_edit)) { openEditor(index) })
-            if (!isActive) {
-                actions.addView(
-                    actionButton(getString(R.string.action_set_default)) {
-                        Prefs.setActiveEntry(this@MainActivity, index)
-                        renderModelList()
-                        render()
-                        toast(getString(R.string.model_default_pending))
-                    },
-                )
-            } else {
-                actions.addView(
-                    textLabel(getString(R.string.model_entry_default), getColor(R.color.accent), 12f),
-                )
-            }
-            actions.addView(actionButton(getString(R.string.action_delete)) { deleteEntry(index) })
-            group.addView(actions)
-            modelList.addView(
-                group,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { bottomMargin = dp(10) },
-            )
-        }
+        modelListEmpty.visibility = View.GONE
     }
 
     /**
@@ -1586,12 +1544,13 @@ class MainActivity : Activity() {
 
     private fun confirmBackup() {
         if (backupBusy) return
-        android.app.AlertDialog.Builder(this)
-            .setTitle(R.string.backup_confirm_title)
-            .setMessage(R.string.backup_confirm_body)
-            .setPositiveButton(android.R.string.ok) { _, _ -> startBackup() }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        // 2.16.2：统一为 Eta 风格 BottomSheet，动效与全 App 一致
+        EtaSheet.confirm(
+            this,
+            getString(R.string.backup_confirm_title),
+            getString(R.string.backup_confirm_body),
+            getString(R.string.action_export_backup),
+        ) { startBackup() }
     }
 
     private fun startBackup() {
@@ -1679,12 +1638,13 @@ class MainActivity : Activity() {
     }
 
     private fun confirmRestore(uri: android.net.Uri) {
-        android.app.AlertDialog.Builder(this)
-            .setTitle(R.string.restore_confirm_title)
-            .setMessage(R.string.restore_confirm_body)
-            .setPositiveButton(android.R.string.ok) { _, _ -> startRestore(uri) }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        // 2.16.2：统一为 Eta 风格 BottomSheet
+        EtaSheet.confirm(
+            this,
+            getString(R.string.restore_confirm_title),
+            getString(R.string.restore_confirm_body),
+            getString(R.string.action_import_backup),
+        ) { startRestore(uri) }
     }
 
     private fun startRestore(uri: android.net.Uri) {

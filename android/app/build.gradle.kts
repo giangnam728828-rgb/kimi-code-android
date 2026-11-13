@@ -23,8 +23,8 @@ android {
         // 2.15.0: keep every group in its own providers.<alias> section and
         // allow picking several models for one group at once.
         // Must stay strictly above 2.14.0 / 27 to overwrite the installed build.
-        versionCode = 30
-        versionName = "2.16.1"
+        versionCode = 31
+        versionName = "2.16.2"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
