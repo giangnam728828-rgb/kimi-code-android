@@ -54,8 +54,14 @@ class HomeActivity : Activity() {
 
     private val timeFormat = SimpleDateFormat("HH:mm", Locale.CHINA)
 
+    /** 上次启动崩掉的堆栈，构建首页时贴一条红条出来。 */
+    private var lastCrash: String? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashGuard.install(this)
+        lastCrash = CrashGuard.consume(this)
+
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.parseColor(DshUi.BG_BOTTOM)
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
@@ -71,12 +77,19 @@ class HomeActivity : Activity() {
         pages = FrameLayout(this)
         root.addView(pages, FrameLayout.LayoutParams(-1, -1))
 
-        buildNavBar()
-        buildDrawer()
-
-        Runtime.addListener(listener)
-        selectTab(0)
-        maybeStartEngine()
+        // 首页是手搓的原生布局，任何一处抛异常都会让用户只看到白屏。
+        // 兜住：把堆栈记下来，直接退到网页版工作台，至少功能是完整的。
+        try {
+            buildNavBar()
+            buildDrawer()
+            Runtime.addListener(listener)
+            selectTab(0)
+            maybeStartEngine()
+        } catch (t: Throwable) {
+            CrashGuard.record(this, t)
+            fallbackToWeb(t)
+            return
+        }
 
         // 手机操控：起本地桥，并把 MCP 脚本与配置写进容器。放在后台线程，
         // 不拖慢首页第一帧；引擎没装时这些目录也只是空写一次。
@@ -86,6 +99,19 @@ class HomeActivity : Activity() {
                 PhoneAccess.installIntoContainer(this)
             }
         }.apply { isDaemon = true }.start()
+    }
+
+    private fun fallbackToWeb(error: Throwable) {
+        runCatching {
+            val intent = Intent(this, MainActivity::class.java).apply {
+                putExtra(MainActivity.EXTRA_OPEN_WEB, true)
+            }
+            startActivity(intent)
+            Toast.makeText(this, "原生首页加载失败，已切到网页版（详情见剪贴板）", Toast.LENGTH_LONG).show()
+            lastCrash = lastCrash ?: error.stackTraceToString()
+            lastCrash?.let { CrashGuard.copyToClipboard(this, it) }
+        }
+        finish()
     }
 
     override fun onResume() {
@@ -150,7 +176,7 @@ class HomeActivity : Activity() {
                 layoutParams = LinearLayout.LayoutParams(dp(28f), dp(24f))
             }
             val glyph = DshIcon.view(this, icon, Color.parseColor(DshUi.MUTED), 22, 1.7f)
-            iconBox.addView(glyph, FrameLayout.LayoutParams(glyph.layoutParams).apply { gravity = Gravity.CENTER })
+            iconBox.addView(glyph, DshUi.centerParams())
             iconBox.tag = icon
             val textView = DshUi.text(this, label, 11f, DshUi.MUTED)
             item.addView(iconBox)
@@ -176,7 +202,7 @@ class HomeActivity : Activity() {
             if (type != null) {
                 iconBox.removeAllViews()
                 val glyph = DshIcon.view(this, type, Color.parseColor(color), 22, if (on) 1.9f else 1.7f)
-                iconBox.addView(glyph, FrameLayout.LayoutParams(glyph.layoutParams).apply { gravity = Gravity.CENTER })
+                iconBox.addView(glyph, DshUi.centerParams())
             }
             item.background = if (on) DshUi.fill(DshUi.PRIMARY_SOFT, 16f) else null
         }
@@ -190,6 +216,11 @@ class HomeActivity : Activity() {
 
     private fun selectTab(index: Int) {
         tab = index
+        CrashGuard.route = when (index) {
+            0 -> "首页/会话"
+            1 -> "首页/运行"
+            else -> "首页/设置"
+        }
         pages.removeAllViews()
         val page = when (index) {
             0 -> buildChatsPage()
@@ -216,6 +247,10 @@ class HomeActivity : Activity() {
         scroll.addView(body, ViewGroup.LayoutParams(-1, -2))
 
         body.addView(buildTopBar("会话", subtitle(), onMenu = { openDrawer() }))
+        lastCrash?.let { crash ->
+            body.addView(DshUi.spacer(this, 12f))
+            body.addView(crashBanner(crash))
+        }
         body.addView(DshUi.spacer(this, 14f))
 
         val search = DshUi.searchField(this, "搜索会话") { value ->
@@ -367,6 +402,28 @@ class HomeActivity : Activity() {
         addView(DshUi.text(this@HomeActivity, detail, 12.5f, DshUi.MUTED, lines = 2).apply {
             gravity = Gravity.CENTER
         })
+    }
+
+    /**
+     * 上次崩溃的红条：点一下整段堆栈进剪贴板，再点一次就消失。
+     * 用户不用连电脑，粘出来发一条消息就能定位。
+     */
+    private fun crashBanner(text: String): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        background = DshUi.fill("#FFF4F2", 16f, "#F3D6D2")
+        setPadding(dp(14f), dp(12f), dp(14f), dp(12f))
+        isClickable = true
+        addView(DshUi.text(this@HomeActivity, "上次启动崩了一次 · 点这里复制日志", 13.5f, "#B4372E", true))
+        addView(DshUi.spacer(this@HomeActivity, 6f))
+        addView(DshUi.text(this@HomeActivity, CrashGuard.summary(text), 11f, "#8A5A55", lines = 3).apply {
+            typeface = Typeface.MONOSPACE
+        })
+        setOnClickListener {
+            CrashGuard.copyToClipboard(this@HomeActivity, text)
+            lastCrash = null
+            Toast.makeText(this@HomeActivity, "日志已复制，粘贴出来即可", Toast.LENGTH_SHORT).show()
+            selectTab(0)
+        }
     }
 
     private fun showSessionActions(session: SessionRepository.Session) {
@@ -555,7 +612,7 @@ class HomeActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(dp(42f), dp(42f))
             background = DshUi.fillInt(Color.parseColor("#E8EEFB"), 21f)
             val g = DshIcon.view(this@HomeActivity, DshIcon.PERSON, Color.parseColor("#3B6BD6"), 22, 1.6f)
-            addView(g, FrameLayout.LayoutParams(g.layoutParams).apply { gravity = Gravity.CENTER })
+            addView(g, DshUi.centerParams())
         })
         account.addView(DshUi.gap(this, 12f))
         val who = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }

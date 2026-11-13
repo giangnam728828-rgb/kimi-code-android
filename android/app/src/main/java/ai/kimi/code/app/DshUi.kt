@@ -165,7 +165,7 @@ object DshUi {
             iconSizeDp,
             if (solid != null) 1.9f else 1.7f,
         )
-        addView(glyph, FrameLayout.LayoutParams(glyph.layoutParams).apply { gravity = Gravity.CENTER })
+        addView(glyph, DshUi.centerParams())
         setOnClickListener { onClick() }
         isClickable = true
     }
@@ -284,7 +284,7 @@ object DshUi {
                 layoutParams = LinearLayout.LayoutParams(context.dp(34f), context.dp(34f))
                 background = fillInt(bg, 11f)
                 val g = DshIcon.view(context, icon, fg, 19, 1.6f)
-                addView(g, FrameLayout.LayoutParams(g.layoutParams).apply { gravity = Gravity.CENTER })
+                addView(g, DshUi.centerParams())
             })
             addView(gap(context, 13f))
             addView(text(context, label, 15f, TEXT).apply {
@@ -304,6 +304,19 @@ object DshUi {
         ).apply { leftMargin = context.dp(insetDp); rightMargin = context.dp(insetDp) }
         setBackgroundColor(Color.parseColor("#F1F1F7"))
     }
+
+    /**
+     * Layout params for a freshly built icon view inside a FrameLayout.
+     *
+     * 2.19.1 修：以前写的是 `FrameLayout.LayoutParams(glyph.layoutParams)`，
+     * 但 DshIcon.view() 造出来的 View 还没 addView 过，layoutParams 是 null，
+     * 这个构造函数第一行就去读 source.width → NullPointerException，
+     * 首页 onCreate 直接崩，表现出来就是白屏闪退。
+     */
+    fun centerParams(): FrameLayout.LayoutParams = FrameLayout.LayoutParams(
+        ViewGroup.LayoutParams.WRAP_CONTENT,
+        ViewGroup.LayoutParams.WRAP_CONTENT,
+    ).apply { gravity = Gravity.CENTER }
 
     // ---- inputs ------------------------------------------------------------
 
@@ -330,7 +343,9 @@ object DshUi {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
         ))
         val icon = DshIcon.view(context, DshIcon.SEARCH, Color.parseColor(MUTED), 18, 1.7f)
-        addView(icon, FrameLayout.LayoutParams(icon.layoutParams).apply {
+        addView(icon, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply {
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
             leftMargin = context.dp(14f)
         })
