@@ -41,6 +41,8 @@ object WebBootInjector {
             append("\n")
             append(MODEL_GROUPS_JS)
             append("\n")
+            append(DOWNLOAD_BRIDGE_JS)
+            append("\n")
             if (autonomy) {
                 append(AUTONOMY_JS)
                 append("\n")
@@ -72,6 +74,48 @@ object WebBootInjector {
     }
 
     fun stream(script: String): ByteArrayInputStream = ByteArrayInputStream(script.toByteArray())
+
+    /**
+     * 2.18.0：`blob:` 下载。
+     *
+     * 网页导出配置/会话走的是 `URL.createObjectURL` + `<a download>`，WebView
+     * 会把这个 blob URL 交给 DownloadListener，但 DownloadManager 存不了
+     * `blob:`。这里让页面自己 fetch 回二进制、转 base64，再交给
+     * `KimiHost.saveBase64` 落盘。调用时机就在点击之后，URL 还没被 revoke。
+     */
+    fun blobFetchScript(url: String, name: String): String = """
+        (function(){
+          var target = ${jsString(url)};
+          var filename = ${jsString(name)};
+          fetch(target).then(function(r){ return r.blob(); }).then(function(blob){
+            var reader = new FileReader();
+            reader.onload = function(){
+              var data = String(reader.result || '');
+              var comma = data.indexOf(',');
+              if (comma < 0) return;
+              KimiHost.saveBase64(filename, blob.type || 'application/octet-stream', data.substring(comma + 1));
+            };
+            reader.readAsDataURL(blob);
+          }).catch(function(e){
+            console.log('kimi blob download failed', e);
+          });
+        })();
+    """.trimIndent()
+
+    private fun jsString(value: String): String = buildString {
+        append('\'')
+        for (ch in value) {
+            when (ch) {
+                '\\' -> append("\\\\")
+                '\'' -> append("\\'")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '<' -> append("\\u003c")
+                else -> append(ch)
+            }
+        }
+        append('\'')
+    }
 
     /**
      * 模型列表按供应商分组。
@@ -181,4 +225,37 @@ object WebBootInjector {
     private const val AUTONOMY_JS =
         ";(function(){try{localStorage.setItem('kimi-web.permission','auto');" +
             "localStorage.setItem('kimi-web.permission-sticky-at',String(Date.now()));}catch(e){}})();"
+
+    /**
+     * 2.18.0：接住 `<a download>` 的 blob 下载。
+     *
+     * DownloadListener 只拿得到 `blob:https://.../uuid`，拿不到 `download`
+     * 属性里的文件名，落盘就成了 `kimi-1699....json`。这里在捕获阶段先接住
+     * 点击：立即 fetch（赶在页面 revoke 之前）、用页面自己的文件名交给宿主，
+     * 再 preventDefault，避免 DownloadListener 重复触发一次。
+     */
+    private const val DOWNLOAD_BRIDGE_JS = """;(function(){
+  if (window.__etaDownloadBridge) return;
+  window.__etaDownloadBridge = 1;
+  document.addEventListener('click', function(e){
+    var node = e.target;
+    var link = node && node.closest ? node.closest('a[download]') : null;
+    if (!link) return;
+    var href = link.getAttribute('href') || '';
+    if (href.indexOf('blob:') !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var name = link.getAttribute('download') || 'download';
+    fetch(href).then(function(r){ return r.blob(); }).then(function(blob){
+      var reader = new FileReader();
+      reader.onload = function(){
+        var data = String(reader.result || '');
+        var comma = data.indexOf(',');
+        if (comma < 0) return;
+        KimiHost.saveBase64(name, blob.type || 'application/octet-stream', data.substring(comma + 1));
+      };
+      reader.readAsDataURL(blob);
+    }).catch(function(err){ console.log('kimi download failed', err); });
+  }, true);
+})();"""
 }

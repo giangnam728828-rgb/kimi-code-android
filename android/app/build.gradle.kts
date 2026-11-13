@@ -26,8 +26,8 @@ android {
         // only lists what the group actually saved, workspace on shared
         // storage + full-auto tool permission for the agent.
         // Must stay strictly above the installed build.
-        versionCode = 33
-        versionName = "2.17.1"
+        versionCode = 34
+        versionName = "2.18.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

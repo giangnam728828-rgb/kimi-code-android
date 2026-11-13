@@ -3,6 +3,7 @@ package ai.kimi.code.app
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.DownloadManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -12,7 +13,12 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Message
+import android.provider.MediaStore
+import android.util.Base64
+import android.webkit.JavascriptInterface
+import android.webkit.ValueCallback
 import android.text.InputType
 import android.view.GestureDetector
 import android.view.MotionEvent
@@ -108,11 +114,26 @@ class MainActivity : Activity() {
     /** Popup probe WebView from window.open; reused so it never accumulates. */
     private var probeWebView: WebView? = null
 
+    // --- 2.18.0 附件：网页里的 <input type=file> 走这里 -------------------
+    /** 网页发起的文件选择，结果必须回给它；为空表示当前没有进行中的选择。 */
+    private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
+    /** 拍照时相机的输出 URI，onActivityResult 里回传给网页。 */
+    private var cameraOutputUri: Uri? = null
+    /** 等 CAMERA 权限期间挂起的回调，授权后继续拍照。 */
+    private var pendingCaptureCallback: ValueCallback<Array<Uri>>? = null
+    /** 长按图片「保存到相册」时解码出的临时位图，避免重复下载。 */
+    private var lastImageSaveUrl: String? = null
+
     private val listener: () -> Unit = { runOnUiThread { render() } }
 
     private companion object {
         const val REQUEST_PICK_BACKUP = 3001
+        const val REQUEST_FILE_CHOOSER = 3002
+        const val REQUEST_CAPTURE_IMAGE = 3003
+        const val REQUEST_CAMERA_PERMISSION = 1002
         const val KEY_WEB_STATE = "web_view_state"
+
+        val IMAGE_EXTENSIONS = setOf(".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif", ".bmp")
 
         /**
          * WebView state must also survive a user-initiated finish() + relaunch,
@@ -522,8 +543,11 @@ class MainActivity : Activity() {
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.databaseEnabled = true
-        settings.allowFileAccess = false
-        settings.allowContentAccess = false
+        // 2.18.0：附件上传。文件选择器回传的是 content:// URI，这两项一旦关掉，
+        // 网页即使拿到 File 也读不出字节，表现就是「选了文件没反应」。页面本身
+        // 只加载 127.0.0.1 的工作台，不存在把远程页面放进来的风险。
+        settings.allowFileAccess = true
+        settings.allowContentAccess = true
         settings.mediaPlaybackRequiresUserGesture = false
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = false
@@ -592,6 +616,35 @@ class MainActivity : Activity() {
                 transport.webView = probe
                 resultMsg.sendToTarget()
                 return true
+            }
+
+            /**
+             * 2.18.0：附件按钮的真正落点。对话输入框里有一个隐藏的
+             * `<input type="file" multiple>`（`composer-attach`），WebView 不实现
+             * 这个回调就会把点击静默吞掉 —— 这正是「点上传没反应、发不了文档和
+             * 图片」的根因。返回 true 表示我们自己处理，网页会等 callback。
+             */
+            override fun onShowFileChooser(
+                view: WebView?,
+                callback: ValueCallback<Array<Uri>>?,
+                params: FileChooserParams?,
+            ): Boolean {
+                if (callback == null) return false
+                // 上一次没走完的选择先取消，避免回调堆积导致后面的点击全哑。
+                fileChooserCallback?.onReceiveValue(null)
+                fileChooserCallback = callback
+                val accept = params?.acceptTypes
+                    ?.map { it.trim() }
+                    ?.filter { it.isNotEmpty() }
+                    ?: emptyList()
+                val wantsImage = accept.any { it.startsWith("image/") } ||
+                    accept.any { it.lowercase() in IMAGE_EXTENSIONS }
+                // capture 只对图片有意义；有些页面会带 capture 但仍想从相册选，
+                // 这里优先按「拍照」处理，失败再退回文件选择器。
+                if (params?.isCaptureEnabled == true && wantsImage) {
+                    return startCameraCapture()
+                }
+                return openDocumentPicker(accept)
             }
         }
         webView.webViewClient = object : WebViewClient() {
@@ -669,6 +722,225 @@ class MainActivity : Activity() {
         webView.setOnTouchListener { _, event ->
             gesture.onTouchEvent(event)
             false
+        }
+        // 2.18.0：网页「导出 / 下载」的落点。http(s) 交给系统下载器，
+        // blob:（前端导出配置、会话 Markdown 用的就是它）走 JS 桥转 base64。
+        webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+            handleDownload(url, userAgent, contentDisposition, mimeType)
+        }
+        webView.addJavascriptInterface(HostBridge(), "KimiHost")
+    }
+
+    // ------------------------------------------------------------ 附件与下载
+
+    /**
+     * 打开系统文件选择器。`accept` 里可能混着 MIME（`image/*`）和扩展名
+     * （`.json`）。只给扩展名时不能把 type 直接设成它 —— 国产文件管理器会把
+     * 不匹配的文件全部置灰，用户以为「点了没反应」。这种情况退回 `*/*`。
+     */
+    private fun openDocumentPicker(accept: List<String>): Boolean {
+        val mimeTypes = accept.filter { it.contains("/") && it != "*/*" }
+        val hasExtensionOnly = accept.any { it.startsWith(".") }
+        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = when {
+                mimeTypes.size == 1 && !hasExtensionOnly -> mimeTypes[0]
+                else -> "*/*"
+            }
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            if (mimeTypes.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes.toTypedArray())
+        }
+        return runCatching {
+            startActivityForResult(Intent.createChooser(intent, "选择文件"), REQUEST_FILE_CHOOSER)
+            true
+        }.getOrElse {
+            Runtime.log("无法打开文件选择器：${it.message}")
+            finishFileChooser(null)
+            toast("没有可用的文件管理器")
+            false
+        }
+    }
+
+    /** 拍照上传：需要 CAMERA 权限和一个可写的 content:// 输出 URI。 */
+    private fun startCameraCapture(): Boolean {
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            pendingCaptureCallback = fileChooserCallback
+            requestPermissions(arrayOf(Manifest.permission.CAMERA), REQUEST_CAMERA_PERMISSION)
+            return true
+        }
+        val file = LocalFileProvider.newCameraFile(this)
+        val uri = LocalFileProvider.cameraUri(this, file)
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(MediaStore.EXTRA_OUTPUT, uri)
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        if (intent.resolveActivity(packageManager) == null) {
+            // 没有相机 App：退回文件选择器，至少还能从相册挑图。
+            return openDocumentPicker(listOf("image/*"))
+        }
+        return runCatching {
+            cameraOutputUri = uri
+            startActivityForResult(intent, REQUEST_CAPTURE_IMAGE)
+            true
+        }.getOrElse {
+            cameraOutputUri = null
+            Runtime.log("无法启动相机：${it.message}")
+            finishFileChooser(null)
+            toast("无法启动相机")
+            false
+        }
+    }
+
+    /** 把结果交还给网页，并清空所有挂起状态。 */
+    private fun finishFileChooser(uris: Array<Uri>?) {
+        val callback = fileChooserCallback
+        fileChooserCallback = null
+        pendingCaptureCallback = null
+        cameraOutputUri = null
+        runCatching { callback?.onReceiveValue(uris) }
+    }
+
+    /**
+     * 下载分三类：
+     * - `http(s)`：本地服务生成的文件（或外链），交给 DownloadManager 落盘；
+     * - `blob:`：前端 `URL.createObjectURL` 的结果，DownloadManager 存不了，
+     *   让页面 fetch 回二进制再 base64 交回来；
+     * - `data:`：直接解码。
+     */
+    private fun handleDownload(
+        url: String?,
+        userAgent: String?,
+        contentDisposition: String?,
+        mimeType: String?,
+    ) {
+        if (url.isNullOrBlank()) return
+        val name = guessFileName(url, contentDisposition, mimeType)
+        when {
+            url.startsWith("blob:", true) -> {
+                toast("正在准备下载…")
+                webView.evaluateJavascript(WebBootInjector.blobFetchScript(url, name), null)
+            }
+            url.startsWith("data:", true) -> {
+                Thread {
+                    runCatching {
+                        val bytes = decodeDataUrl(url) ?: error("无法解析 data URL")
+                        val file = writeDownload(name, bytes)
+                        runOnUiThread { toast("已保存到 下载/KimiCode/${file.name}") }
+                    }.onFailure {
+                        runOnUiThread { toast("保存失败：${it.message}") }
+                    }
+                }.start()
+            }
+            else -> {
+                val request = DownloadManager.Request(Uri.parse(url)).apply {
+                    mimeType?.takeIf { it.isNotBlank() }?.let { setMimeType(it) }
+                    setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "KimiCode/$name")
+                    userAgent?.takeIf { it.isNotBlank() }?.let { addRequestHeader("User-Agent", it) }
+                    // 工作台的静态与导出接口都要 bearer token；只对本地回环发，
+                    // 免得不小心把凭据带给外链。
+                    val host = runCatching { Uri.parse(url).host }.getOrNull()
+                    if (host == "127.0.0.1" || host == "localhost") {
+                        ProotRuntime.readToken(this@MainActivity)?.let {
+                            addRequestHeader("Authorization", "Bearer $it")
+                        }
+                        CookieManager.getInstance().getCookie(url)?.let {
+                            addRequestHeader("Cookie", it)
+                        }
+                    }
+                }
+                runCatching {
+                    val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                    manager.enqueue(request)
+                    toast("已开始下载，保存在 下载/KimiCode/")
+                }.onFailure {
+                    Runtime.log("下载失败：${it.message}")
+                    toast("下载失败：${it.message}")
+                }
+            }
+        }
+    }
+
+    private fun decodeDataUrl(url: String): ByteArray? {
+        val comma = url.indexOf(',')
+        if (comma < 0) return null
+        val meta = url.substring(5, comma)
+        val payload = url.substring(comma + 1)
+        return if (meta.contains("base64", true)) {
+            Base64.decode(payload, Base64.DEFAULT)
+        } else {
+            java.net.URLDecoder.decode(payload, "UTF-8").toByteArray()
+        }
+    }
+
+    /** 写入 `下载/KimiCode/`；公共目录不可写时退回应用外部目录。 */
+    private fun downloadDir(): File {
+        val public = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        val dir = File(public, "KimiCode")
+        if (dir.exists() || dir.mkdirs()) return dir
+        val fallback = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: filesDir
+        return File(fallback, "KimiCode").apply { mkdirs() }
+    }
+
+    private fun writeDownload(name: String, bytes: ByteArray): File {
+        val dir = downloadDir()
+        var file = File(dir, name)
+        if (file.exists()) {
+            val stem = name.substringBeforeLast('.', name)
+            val ext = name.substringAfterLast('.', "")
+            var index = 2
+            while (file.exists()) {
+                val candidate = if (ext.isEmpty()) "$stem-$index" else "$stem-$index.$ext"
+                file = File(dir, candidate)
+                index++
+            }
+        }
+        file.writeBytes(bytes)
+        return file
+    }
+
+    private fun guessFileName(url: String, contentDisposition: String?, mimeType: String?): String {
+        val fromHeader = contentDisposition
+            ?.substringAfter("filename=", "")
+            ?.trim()
+            ?.trim('"', '\'')
+            ?.takeIf { it.isNotEmpty() }
+        if (fromHeader != null) return sanitizeFileName(fromHeader)
+        val fromUrl = runCatching {
+            Uri.parse(url).lastPathSegment?.substringAfterLast('/')
+        }.getOrNull()?.takeIf { it.isNotBlank() && !it.startsWith("blob:") }
+        if (fromUrl != null) return sanitizeFileName(java.net.URLDecoder.decode(fromUrl, "UTF-8"))
+        val ext = when {
+            mimeType?.contains("json") == true -> "json"
+            mimeType?.startsWith("image/jpeg") == true -> "jpg"
+            mimeType?.startsWith("image/png") == true -> "png"
+            mimeType?.contains("markdown") == true -> "md"
+            mimeType?.startsWith("text/") == true -> "txt"
+            else -> "bin"
+        }
+        return "kimi-${System.currentTimeMillis()}.$ext"
+    }
+
+    private fun sanitizeFileName(name: String): String =
+        name.replace(Regex("[/\\\\:*?\"<>|\\u0000-\\u001f]"), "_").take(120).ifBlank { "download" }
+
+    /**
+     * 页面侧调用的桥。只暴露「保存一段 base64 到下载目录」这一件事，
+     * 不碰文件系统其它位置。
+     */
+    inner class HostBridge {
+        @JavascriptInterface
+        fun saveBase64(name: String?, mime: String?, base64: String?) {
+            if (base64.isNullOrEmpty()) return
+            Thread {
+                runCatching {
+                    val bytes = Base64.decode(base64, Base64.DEFAULT)
+                    val file = writeDownload(sanitizeFileName(name ?: "download"), bytes)
+                    runOnUiThread { toast("已保存到 下载/KimiCode/${file.name}") }
+                }.onFailure {
+                    runOnUiThread { toast("保存失败：${it.message}") }
+                }
+            }.start()
         }
     }
 
@@ -1975,14 +2247,35 @@ class MainActivity : Activity() {
     @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQUEST_PICK_BACKUP || resultCode != RESULT_OK) return
-        val uri = data?.data ?: return
-        confirmRestore(uri)
+        when (requestCode) {
+            REQUEST_FILE_CHOOSER -> {
+                // parseResult 会读 data.data 与 clipData（多选），比手写分支稳。
+                val uris = runCatching {
+                    WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+                }.getOrNull()
+                finishFileChooser(uris?.takeIf { it.isNotEmpty() })
+            }
+            REQUEST_CAPTURE_IMAGE -> {
+                val uri = cameraOutputUri
+                if (resultCode == RESULT_OK && uri != null) {
+                    finishFileChooser(arrayOf(uri))
+                } else {
+                    finishFileChooser(null)
+                }
+            }
+            REQUEST_PICK_BACKUP -> {
+                if (resultCode != RESULT_OK) return
+                val uri = data?.data ?: return
+                confirmRestore(uri)
+            }
+        }
     }
 
     /**
      * 2.17.0：存储权限往往是服务启动后才弹的。授予之后补一次工作区登记，
      * 让 Agent 立刻能访问 /storage/emulated/0，不用等下一次重启。
+     *
+     * 2.18.0：拍照前申请的 CAMERA 也走这里，授权后继续打开相机。
      */
     override fun onRequestPermissionsResult(
         requestCode: Int,
@@ -1990,6 +2283,18 @@ class MainActivity : Activity() {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_CAMERA_PERMISSION) {
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            if (granted && fileChooserCallback != null) {
+                pendingCaptureCallback = null
+                startCameraCapture()
+            } else {
+                finishFileChooser(null)
+                toast("没有相机权限，已取消拍照")
+            }
+            return
+        }
         if (requestCode != 1001) return
         if (Runtime.phase != Runtime.Phase.READY || Runtime.port == 0) return
         WorkspaceBootstrap.ensureTrusted(this, Runtime.port)
@@ -2100,13 +2405,20 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- helpers
 
     private fun requestStoragePermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) return
+        // 2.18.0：旧实现从 Android 11 起直接 return，理由是「分区存储不需要」。
+        // 但本应用 targetSdk=28 且开了 requestLegacyExternalStorage，系统仍按
+        // 旧模型走，读 /storage/emulated/0 依旧要 READ_EXTERNAL_STORAGE。
+        // 少了这一步，Agent 能在容器里看到路径、却没有读权限 —— 用户感知就是
+        // 「根本没有读写我手机文件的权限」。Android 13+ 对旧 targetSdk 仍认这个
+        // 权限（会显示为「照片和视频」），所以统一请求。
         val needed = mutableListOf<String>()
-        if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-            needed.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-        }
         if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
             needed.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        // 写公共下载目录（DownloadManager / 保存图片）在旧存储模型下仍要 WRITE。
+        // Android 13+ 对 targetSdk<=32 的应用会把它合并成「文件和媒体」授权。
+        if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            needed.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         }
         if (needed.isNotEmpty()) requestPermissions(needed.toTypedArray(), 1001)
     }
