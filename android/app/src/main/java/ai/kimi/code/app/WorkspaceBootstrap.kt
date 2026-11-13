@@ -15,13 +15,29 @@ import java.net.URL
  */
 object WorkspaceBootstrap {
 
+    /** 4 秒节流：页面每次加载都会调一次，避免连续 PATCH。 */
+    @Volatile private var lastAttemptAt = 0L
+
     fun ensureTrusted(context: Context, port: Int) {
         val token = ProotRuntime.readToken(context) ?: return
         val workdir = ProotRuntime.currentWorkdir(context)
         if (workdir.isBlank()) return
+        val now = System.currentTimeMillis()
+        if (now - lastAttemptAt < 4000) return
+        lastAttemptAt = now
         Thread {
             runCatching {
-                val id = find(port, token, workdir)
+                // 2.18.1：服务就绪时网页往往还没打开，工作区尚未登记；旧实现只
+                // 查一次就放弃，新装用户因此永远拿不到 /storage/emulated/0 的
+                // 附加目录 —— Agent 只能看见 KimiCode 子目录，看不到 Download、
+                // DCIM、Documents，表现就是「不能查找我的手机文件夹」。
+                // 这里最多等 4.5 秒，让网页把工作区建出来。
+                var id: String? = null
+                for (attempt in 0..3) {
+                    id = find(port, token, workdir)
+                    if (id != null) break
+                    if (attempt < 3) Thread.sleep(1500)
+                }
                 if (id == null) {
                     // 服务端按 root 建工作区，这里不抢先创建：否则网页首次打开
                     // 会再建一个同路径的空工作区，侧边栏出现两条同名记录。
@@ -39,9 +55,12 @@ object WorkspaceBootstrap {
     }
 
     /**
-     * 老用户的工作区还在 `/root/workspace`（换目录会让历史会话看起来消失），
-     * 但手机共享存储依然要能被工具访问。把它加进 workspace 的
-     * `additional_dirs`，Agent 就能读写 /storage/emulated/0 下的真实文件。
+     * 把整个手机共享存储挂进 workspace 的 `additional_dirs`，Agent 的
+     * Read / Write / Edit / Glob / Grep 才能作用在用户真实文件上。
+     *
+     * 2.18.1 修正：旧实现只要工作区在 `/storage/emulated/0` 下就直接 return，
+     * 而默认工作区正是 `/storage/emulated/0/KimiCode` —— 等于新装用户从来没
+     * 拿到过父目录授权。现在只有工作区本身就是存储根时才跳过。
      */
     private fun grantPhoneStorage(context: Context, port: Int, token: String, id: String, workdir: String) {
         val phone = "/storage/emulated/0"
@@ -49,7 +68,7 @@ object WorkspaceBootstrap {
             Runtime.log("没有可访问的手机存储目录（可能未授予存储权限）")
             return
         }
-        if (workdir.startsWith(phone)) return   // 工作区本身就在手机存储里
+        if (workdir.trimEnd('/') == phone) return
         val list = request(port, token, "/api/v1/workspaces", "GET", null) ?: return
         val items = runCatching {
             JSONObject(list).optJSONObject("data")?.optJSONArray("items")
@@ -57,7 +76,7 @@ object WorkspaceBootstrap {
         for (i in 0 until items.length()) {
             val item = items.optJSONObject(i) ?: continue
             if (item.optString("id") != id) continue
-            val dirs = item.optJSONArray("additional_dirs") ?: continue
+            val dirs = item.optJSONArray("additional_dirs") ?: org.json.JSONArray()
             for (j in 0 until dirs.length()) {
                 if (dirs.optString(j).trimEnd('/') == phone) return
             }

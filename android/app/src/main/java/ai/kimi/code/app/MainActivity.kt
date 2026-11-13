@@ -690,6 +690,11 @@ class MainActivity : Activity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 webLoading.visibility = View.GONE
+                // 2.18.1：工作区是网页打开时才登记的，服务刚就绪那一刻还查不到。
+                // 页面加载完成后补一次，把「信任 + 手机存储附加目录」落实。
+                if (Runtime.phase == Runtime.Phase.READY && Runtime.port > 0) {
+                    WorkspaceBootstrap.ensureTrusted(this@MainActivity, Runtime.port)
+                }
             }
 
             override fun onReceivedError(

@@ -99,6 +99,7 @@ object ProotRuntime {
             if (usable) {
                 ensureGuestDir(context, preferred)
                 activeWorkdir = preferred
+                seedAgentGuide(real)
                 return preferred
             }
             Runtime.log("无法创建 $preferred（存储权限未授予？），本次回退到 /root/workspace")
@@ -112,6 +113,44 @@ object ProotRuntime {
     private fun ensureGuestDir(context: Context, guestPath: String) {
         runCatching {
             File(Paths.rootfs(context), guestPath.trimStart('/')).mkdirs()
+        }
+    }
+
+    /**
+     * 2.18.1：给 Agent 一份「这台设备是什么」的说明书。
+     *
+     * Kimi CLI 会把工作区根目录的 `AGENTS.md` 注入系统提示。不写这一份，模型
+     * 不知道自己在一台 Android 手机里、不知道 `/storage/emulated/0` 已挂进来，
+     * 用户说「找一下我下载的文件」时它会先反问路径。只在文件不存在时写入，
+     * 绝不覆盖用户自己的 AGENTS.md。
+     */
+    private fun seedAgentGuide(workdir: File) {
+        val file = File(workdir, "AGENTS.md")
+        if (file.exists()) return
+        runCatching {
+            file.writeText(
+                """
+                # 运行环境：Android 手机
+
+                你运行在一台 Android 手机的 proot 容器里，不是服务器。
+
+                ## 手机文件
+
+                - 手机共享存储挂载在 `/storage/emulated/0`，已加入 workspace 的 additional_dirs。
+                - 常见目录：`Download`、`Documents`、`DCIM`、`Pictures`、`Movies`、`Music`。
+                - Read / Write / Edit / Glob / Grep / Bash 都能直接操作这些真实文件。
+                - `Android/data`、`Android/obb` 是应用私有目录，访问会被拒绝，不要尝试。
+                - 扫描整个存储很慢：先 `ls` 目标子目录，再决定是否递归。
+
+                ## 工作方式
+
+                - 用户说「找一下我的某个文件」时，优先在 Download、Documents、DCIM 下按文件名搜索，
+                  不要先追问完整路径。
+                - 需要看图片内容时直接读文件；需要改文件时先备份再写。
+                - 当前工作目录就是用户选定的项目目录，新建文件默认放这里。
+                """.trimIndent(),
+            )
+            Runtime.log("已写入 Agent 环境说明：${file.absolutePath}")
         }
     }
 
