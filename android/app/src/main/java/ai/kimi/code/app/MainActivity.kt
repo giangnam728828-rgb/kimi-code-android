@@ -104,8 +104,14 @@ class MainActivity : Activity() {
     /** True right after WebView.restoreState: an extra loadUrl would discard the page (and its DOM). */
     private var webViewRestored = false
     private var currentPage = R.id.pageHome
-    /** 桌面启动时置位：引擎 READY 后自动打开工作台。 */
+    /** 外部显式要求打开工作台（快捷方式 / 通知 / 指定会话）。 */
     private var pendingOpenWeb = false
+    /**
+     * 2.20.1：冷启动时按「自动进入工作台」开关决定是否进一次。
+     * 只在启动那一刻取值，之后由启动流程消费掉 —— 不能每次 onResume 都重新读，
+     * 否则从设置页（独立 Activity）返回时会突然跳进工作台。
+     */
+    private var launchAutoEnter = false
     /** Conversation to scroll to after the workspace loads (matched by title). */
     private var pendingSessionTitle: String? = null
     private var lastExternalUrl: String? = null
@@ -174,6 +180,17 @@ class MainActivity : Activity() {
         requestStoragePermission()
         installPhoneEntry()
 
+        // 启动参数必须在第一次 render 之前读入，否则「自动进入」要等下一次状态刷新才生效。
+        val targetPage = intent.getIntExtra(EXTRA_PAGE, 0)
+        pendingOpenWeb = intent.getBooleanExtra(EXTRA_OPEN_WEB, false)
+        pendingSessionTitle = intent.getStringExtra(EXTRA_SESSION_TITLE)
+        // 2.20.1：开关只在冷启动读一次。用户进设置/插件等页会把这两个标记清掉。
+        launchAutoEnter = Prefs.autoEnter(this)
+        if (targetPage != 0) {
+            pendingOpenWeb = false
+            launchAutoEnter = false
+        }
+
         Runtime.addListener(listener)
         render()
 
@@ -181,9 +198,6 @@ class MainActivity : Activity() {
             RuntimeService.start(this)
         }
 
-        val targetPage = intent.getIntExtra(EXTRA_PAGE, 0)
-        pendingOpenWeb = intent.getBooleanExtra(EXTRA_OPEN_WEB, false)
-        pendingSessionTitle = intent.getStringExtra(EXTRA_SESSION_TITLE)
         when (targetPage) {
             PAGE_DATA -> switchPage(R.id.pageData)
             PAGE_TERMINAL -> switchPage(R.id.pageTerminal)
@@ -278,12 +292,19 @@ class MainActivity : Activity() {
 
     /** 2.16.0：Eta 风格的模型供应商两级管理页。2.16.2 加统一转场动效。 */
     private fun openProviderPage() {
+        // 设置页是独立 Activity，返回时 onResume 会 render；这里先取消自动进入，
+        // 否则从设置返回会被直接推进工作台。
+        pendingOpenWeb = false
+        launchAutoEnter = false
         startActivity(Intent(this, ProviderActivity::class.java))
         @Suppress("DEPRECATION")
         overridePendingTransition(R.anim.eta_slide_in, 0)
     }
 
     private fun switchPage(pageId: Int) {
+        // 2.20.1：主动切页说明用户不想停在工作台，取消待进入标记。
+        pendingOpenWeb = false
+        launchAutoEnter = false
         // 2.16.1：底部「设置」与顶栏「模型供应商」按钮都进 Eta 风格供应商页。
         // 旧设置页（模型商编辑器 / 多选弹窗 / 手动输入 / 高级选项）彻底不再
         // 展示，避免两套界面并存让用户觉得繁琐。App 偏好开关已搬进供应商页。
@@ -2241,13 +2262,13 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- render
 
     private fun render() {
-        // 2.20.0：设置里的「自动进入工作台」恢复生效（默认关）。用户在 2.16.1
-        // 明确说过不要自动跳，所以这里只认他自己勾的那一下。
-        if (pendingOpenWeb || Prefs.autoEnter(this)) {
-            if (Runtime.phase == Runtime.Phase.READY) {
-                if (pendingOpenWeb) pendingOpenWeb = false
-                if (!workspaceVisible) openWorkspace()
-            }
+        // 2.20.1：自动进入只在冷启动消费一次，且用户一旦主动切页（设置等）就作废。
+        // 旧写法每帧都读 Prefs.autoEnter，从设置页（独立 Activity）返回时 onResume
+        // 会再调一次 render，于是刚返回就被推进工作台。
+        if ((pendingOpenWeb || launchAutoEnter) && Runtime.phase == Runtime.Phase.READY) {
+            pendingOpenWeb = false
+            launchAutoEnter = false
+            if (!workspaceVisible) openWorkspace()
         }
         ensurePhoneMcp()
         statusTitle.text = Runtime.title
