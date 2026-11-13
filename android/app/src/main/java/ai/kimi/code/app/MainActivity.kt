@@ -21,9 +21,11 @@ import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -192,7 +194,9 @@ class MainActivity : Activity() {
         }
         findViewById<View>(R.id.rowAddress).setOnClickListener { copyAddress() }
         findViewById<View>(R.id.rowLan).setOnClickListener { toggleLan() }
-        findViewById<View>(R.id.rowModel).setOnClickListener { switchPage(R.id.pageSettings) }
+        findViewById<View>(R.id.rowModel).setOnClickListener { openProviderPage() }
+        // 工作台顶栏右上角「模型供应商」按钮：直接从聊天入口管理模型。
+        findViewById<View>(R.id.btnProviderEntry).setOnClickListener { openProviderPage() }
         findViewById<View>(R.id.rowWorkspace).setOnClickListener { promptWorkspace() }
         findViewById<View>(R.id.btnSaveLog).setOnClickListener { saveLog() }
         btnOpenWeb.setOnClickListener { openWorkspace() }
@@ -225,7 +229,21 @@ class MainActivity : Activity() {
         }
     }
 
+    /** 2.16.0：Eta 风格的模型供应商两级管理页。2.16.2 加统一转场动效。 */
+    private fun openProviderPage() {
+        startActivity(Intent(this, ProviderActivity::class.java))
+        @Suppress("DEPRECATION")
+        overridePendingTransition(R.anim.eta_slide_in, 0)
+    }
+
     private fun switchPage(pageId: Int) {
+        // 2.16.1：底部「设置」与顶栏「模型供应商」按钮都进 Eta 风格供应商页。
+        // 旧设置页（模型商编辑器 / 多选弹窗 / 手动输入 / 高级选项）彻底不再
+        // 展示，避免两套界面并存让用户觉得繁琐。App 偏好开关已搬进供应商页。
+        if (pageId == R.id.pageSettings) {
+            openProviderPage()
+            return
+        }
         currentPage = pageId
         pageHome.visibility = if (pageId == R.id.pageHome) View.VISIBLE else View.GONE
         pagePlugins.visibility = if (pageId == R.id.pagePlugins) View.VISIBLE else View.GONE
@@ -233,6 +251,13 @@ class MainActivity : Activity() {
         pageTerminal.visibility = if (pageId == R.id.pageTerminal) View.VISIBLE else View.GONE
         pageData.visibility = if (pageId == R.id.pageData) View.VISIBLE else View.GONE
         hideWorkspace()
+        // 2.16.2 全 App 动效：切页时目标页淡入上移，和弹层/列表同一套节奏
+        EtaMotion.enter(this, when (pageId) {
+            R.id.pagePlugins -> pagePlugins
+            R.id.pageTerminal -> pageTerminal
+            R.id.pageData -> pageData
+            else -> pageHome
+        }, fromDp = 12f)
 
         val pages = listOf(
             R.id.pageHome,
@@ -294,23 +319,153 @@ class MainActivity : Activity() {
         render()
     }
 
+    /**
+     * 2.17.0：「工作目录与自主执行」。
+     *
+     * 用户反馈手机上 AI 不会自己动文件 / 跑构建。根因有两层：
+     * 1. 工作目录默认在容器内（/root/workspace），改的不是手机上的文件；
+     * 2. 网页默认权限模式是 manual，每次工具调用都要手动批准。
+     * 这里一次把两件事都交给用户：目录指到共享存储，权限切到全自主，并给出
+     * 一键环境自检 / 安装 git、python3 的入口。
+     */
     private fun promptWorkspace() {
-        val input = EditText(this).apply {
-            setText(Prefs.workspace(this@MainActivity))
-            inputType = InputType.TYPE_CLASS_TEXT
-            setSelectAllOnFocus(true)
-        }
-        android.app.AlertDialog.Builder(this)
-            .setTitle(R.string.row_workspace)
-            .setMessage("容器内的绝对路径，重启服务后生效")
-            .setView(input)
-            .setPositiveButton(android.R.string.ok) { _, _ ->
-                Prefs.setWorkspace(this, input.text.toString())
-                render()
-                toast("已保存，重启服务后生效")
+        EtaSheet.show(this, "工作目录与自主执行", tall = true) { sheet ->
+            sheet.body.addView(TextView(this).apply {
+                text = "Agent 读写文件、执行命令都发生在这个目录。改成 " +
+                    "/storage/emulated/0/KimiCode 就能直接操作手机文件 —— 这会开启一个" +
+                    "新工作区，旧会话仍留在原来的目录里。"
+                textSize = 13f
+                setTextColor(getColor(R.color.text_muted))
+                setPadding(0, 0, 0, dp(12))
+            })
+            val (pathBox, pathInput) = EtaSheet.field(
+                this, "工作目录", Prefs.workspace(this),
+                "/storage/emulated/0/KimiCode",
+            )
+            sheet.body.addView(pathBox, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(12) })
+
+            val switchCard = EtaUi.card(this, 16)
+            val autonomy = android.widget.Switch(this).apply {
+                text = "全自主执行（自动批准工具调用）"
+                textSize = 15f
+                isChecked = Prefs.autonomy(this@MainActivity)
+                setPadding(dp(16), dp(14), dp(16), dp(14))
             }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            switchCard.addView(autonomy)
+            sheet.body.addView(switchCard, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(6) })
+            sheet.body.addView(TextView(this).apply {
+                text = "开启后，读文件 / 写文件 / 跑命令不再逐条询问；关闭则恢复" +
+                    "「每次都要点批准」。"
+                textSize = 12f
+                setTextColor(getColor(R.color.text_muted))
+                setPadding(dp(4), 0, dp(4), dp(14))
+            })
+
+            // 登录自检：账号掉了时先看这两项，能区分「凭据文件没了」还是
+            // 「config 里的 oauth 段被覆盖了」，不用猜。
+            val credDir = File(File(Paths.rootfs(this), "root/.kimi-code"), "credentials")
+            val credCount = credDir.listFiles { f -> f.isFile && f.name.endsWith(".json") }?.size ?: 0
+            val configText = runCatching { ConfigWriter.configFile(this).readText() }.getOrDefault("")
+            val oauthRefs = Regex("(?m)^\\s*oauth\\s*=").findAll(configText).count()
+            sheet.body.addView(TextView(this).apply {
+                text = "登录自检：凭据文件 $credCount 个 · config 内 oauth 引用 $oauthRefs 处" +
+                    if (credCount == 0) "（未登录，或凭据文件被清理）" else ""
+                textSize = 12f
+                setTextColor(getColor(R.color.text_muted))
+                setPadding(dp(4), 0, dp(4), dp(10))
+            })
+
+            val output = TextView(this).apply {
+                text = "点下面的按钮检查容器里的 Node / Git / Python 是否可用。"
+                textSize = 11.5f
+                typeface = android.graphics.Typeface.MONOSPACE
+                setTextColor(getColor(R.color.text_primary))
+                setTextIsSelectable(true)
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                background = EtaUi.rounded(EtaUi.FIELD, 14)
+            }
+            val outputScroll = ScrollView(this).apply {
+                addView(output)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(150),
+                ).apply { bottomMargin = dp(12) }
+            }
+            sheet.body.addView(outputScroll)
+
+            fun runScript(label: String, script: String) {
+                output.text = "[$label] 执行中…\n"
+                Thread {
+                    val process = runCatching { ProotRuntime.shell(this, script) }.getOrNull()
+                    if (process == null) {
+                        runOnUiThread { output.append("\n无法启动容器命令") }
+                        return@Thread
+                    }
+                    runCatching {
+                        BufferedReader(java.io.InputStreamReader(process.inputStream)).use { reader ->
+                            while (true) {
+                                val line = reader.readLine() ?: break
+                                runOnUiThread {
+                                    output.append(line + "\n")
+                                    outputScroll.post { outputScroll.fullScroll(View.FOCUS_DOWN) }
+                                }
+                            }
+                        }
+                        val code = process.waitFor()
+                        runOnUiThread { output.append("\n[结束] 退出码 $code") }
+                    }
+                }.apply { isDaemon = true }.start()
+            }
+
+            val check = EtaUi.primaryButton(this, "检查开发环境") {
+                runScript(
+                    "检查",
+                    "cd \"\${KIMI_WORKDIR:-/root/workspace}\" && pwd && ls -la | head -15; " +
+                        "echo; node -v; npm -v; git --version 2>&1 | head -1; " +
+                        "python3 --version 2>&1 | head -1; make --version 2>&1 | head -1",
+                )
+            }
+            sheet.body.addView(check, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(8) })
+
+            val install = EtaUi.primaryButton(this, "安装 git / python3 / make") {
+                runScript(
+                    "安装",
+                    "export DEBIAN_FRONTEND=noninteractive; " +
+                        "apt-get update -y && " +
+                        "apt-get install -y --no-install-recommends git python3 make ca-certificates",
+                )
+            }
+            sheet.body.addView(install, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(8) })
+
+            val (row, _) = EtaSheet.dualButtons(
+                this, getString(R.string.action_cancel), "保存并重启",
+                onCancel = { sheet.dismiss() },
+                onConfirm = {},
+            )
+            (row as LinearLayout).getChildAt(1).setOnClickListener {
+                val path = pathInput.text.toString().trim()
+                val pathChanged = path != Prefs.workspace(this)
+                Prefs.setWorkspace(this, path)
+                Prefs.setAutonomy(this, autonomy.isChecked)
+                WebBootInjector.invalidate()
+                sheet.dismiss()
+                render()
+                if (pathChanged) {
+                    RuntimeService.restart(this)
+                    toast("已保存，正在按新目录重启")
+                } else {
+                    toast("已保存")
+                }
+            }
+            sheet.footer.addView(row)
+        }
     }
 
     private fun saveLog() {
@@ -374,6 +529,21 @@ class MainActivity : Activity() {
         settings.loadWithOverviewMode = false
         settings.builtInZoomControls = false
         settings.cacheMode = WebSettings.LOAD_DEFAULT
+        // 2.16.1：登录态保活。WebView 的 cookie 是异步落盘的，覆盖安装/切后台
+        // 时进程被系统杀掉可能来不及写盘，表现就是「Kimi 账号掉了」。这里显式
+        // 允许 cookie 并在 onPause 强制 flush；localStorage 仍按同源保留。
+        settings.saveFormData = true
+        runCatching {
+            val cookies = CookieManager.getInstance()
+            cookies.setAcceptCookie(true)
+            cookies.setAcceptThirdPartyCookies(webView, true)
+        }
+        // 2.16.0 流畅性：本地工作台的静态资源复用缓存（LOAD_DEFAULT 已覆盖），
+        // 开启硬件加速渲染层，滚动与输入更跟手。不动 localStorage，登录态与
+        // 聊天记录依旧按同源保留。
+        settings.loadsImagesAutomatically = true
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        webView.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
@@ -425,6 +595,31 @@ class MainActivity : Activity() {
             }
         }
         webView.webViewClient = object : WebViewClient() {
+            /**
+             * 2.17.0：全自主执行开关打开时，把权限模式注进 `boot.js`
+             * （页面初始化前生效，CSP 允许的同源脚本）。
+             */
+            override fun shouldInterceptRequest(
+                view: WebView?,
+                request: WebResourceRequest?,
+            ): WebResourceResponse? {
+                val url = request?.url ?: return null
+                if (url.path?.trimEnd('/')?.endsWith("boot.js") != true) return null
+                if (url.host != "127.0.0.1" && url.host != "localhost") return null
+                if (!Prefs.autonomy(this@MainActivity)) return null
+                val script = runCatching {
+                    WebBootInjector.autonomyScript(
+                        Runtime.port,
+                        ProotRuntime.readToken(this@MainActivity),
+                    )
+                }.getOrNull() ?: return null
+                return WebResourceResponse(
+                    "application/javascript", "UTF-8", 200, "OK",
+                    mapOf("Cache-Control" to "no-store"),
+                    WebBootInjector.stream(script),
+                )
+            }
+
             override fun shouldOverrideUrlLoading(
                 view: WebView?,
                 request: WebResourceRequest?,
@@ -465,7 +660,7 @@ class MainActivity : Activity() {
                 val fromEdge = e1.x < dp(48)
                 if (!Prefs.swipeBack(this@MainActivity)) return false
                 if (fromEdge && dx > dp(90) && dy < dp(120)) {
-                    if (webView.canGoBack()) webView.goBack() else hideWorkspace()
+                    handleWorkspaceBack()
                     return true
                 }
                 return false
@@ -726,7 +921,7 @@ class MainActivity : Activity() {
             render()
         }
 
-        findViewById<View>(R.id.btnAddModel).setOnClickListener { openEditor(null) }
+        findViewById<View>(R.id.btnAddModel).setOnClickListener { openProviderPage() }
         // Adding several models under one API key belongs in settings, not in a
         // floating chip over the WebView (that chip used to cover the page's
         // send button). The web UI's own model dropdown does the switching;
@@ -748,33 +943,30 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = dp(8) },
         )
+        // 2.16.0：主入口改为 Eta 风格两级页，不再让用户面对多选 dialog
+        // + 手动输入 + 高级选项那一长串控件。
         modelCard?.addView(
             TextView(this).apply {
-                text = getString(R.string.action_manage_provider_models)
-                setTextColor(getColor(R.color.accent))
-                textSize = 13f
+                text = getString(R.string.action_open_providers) + "  ›"
+                setTextColor(getColor(R.color.white))
+                textSize = 14f
                 gravity = android.view.Gravity.CENTER
-                setPadding(dp(10), dp(12), dp(10), dp(14))
-                setOnClickListener {
-                    QuickSettingsDialog.show(
-                        this@MainActivity,
-                        onRefresh = { reloadWorkspace() },
-                        onChanged = { renderModelList(); render() },
-                        onRegisterAll = { registerAllModels() },
-                    )
-                }
+                setTypeface(null, android.graphics.Typeface.BOLD)
+                setBackgroundResource(R.drawable.btn_primary)
+                setPadding(dp(10), dp(13), dp(10), dp(13))
+                setOnClickListener { openProviderPage() }
             },
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
+            ).apply { topMargin = dp(8) },
         )
         modelCard?.addView(
             TextView(this).apply {
-                text = getString(R.string.model_hint_web_switch)
+                text = getString(R.string.provider_entry_hint)
                 setTextColor(getColor(R.color.text_muted))
                 textSize = 11f
-                setPadding(dp(10), 0, dp(10), dp(12))
+                setPadding(dp(10), dp(8), dp(10), dp(12))
             },
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -834,93 +1026,35 @@ class MainActivity : Activity() {
     }
 
     private fun renderModelList() {
-        val entries = Prefs.load(this)
-        val active = Prefs.activeEntry(this)
+        // 2.16.2：设置页已被「模型供应商」页（ProviderActivity）整体取代，
+        // 旧的「分组卡片 + 多选 + 手动输入」UI 不再可达。这里保留空实现，
+        // 让散落各处的调用点保持原控制流，但不再每次回前台都重建几十个
+        // 不可见的 View —— 既彻底去掉旧界面，也少一份主线程开销。
         modelList.removeAllViews()
-        modelListEmpty.visibility = if (entries.isEmpty()) View.VISIBLE else View.GONE
-        entries.forEachIndexed { index, entry ->
-            val isActive = entry.modelAlias == active?.modelAlias
-            // 一个分组 = 一张卡片。卡片之间是留白，卡片内部按「组标题 / 组内模型」
-            // 分层，和网页「更多模型」里的分组形态一致，不再平铺成一列。
-            val group = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setBackgroundResource(R.drawable.bg_card)
-            }
-            group.addView(
-                TextView(this).apply {
-                    text = buildString {
-                        append(entry.alias)
-                        append("  (").append(entry.registeredModels.size).append(" 个模型)")
-                        append(" · ").append(entry.contextSize / 1024).append("K")
-                        if (isUnknownToCatalog(entry)) {
-                            append(" · ").append(getString(R.string.model_entry_unknown_id))
-                        }
-                    }
-                    textSize = 11f
-                    setTypeface(null, android.graphics.Typeface.BOLD)
-                    setTextColor(getColor(R.color.text_secondary))
-                    setBackgroundColor(Color.parseColor("#F2F3F5"))
-                    setPadding(dp(13), dp(8), dp(13), dp(8))
-                    setOnClickListener { openEditor(index) }
-                },
-            )
-            entry.registeredModels.forEach { id ->
-                val isCurrent = id.equals(entry.model, ignoreCase = true)
-                group.addView(
-                    TextView(this).apply {
-                        text = if (isCurrent) "✓  $id   （默认）" else "     $id"
-                        textSize = 13f
-                        setTextColor(getColor(if (isCurrent) R.color.accent else R.color.text_primary))
-                        setPadding(dp(14), dp(9), dp(14), dp(9))
-                        setOnClickListener { switchModelInGroup(index, id) }
-                    },
-                )
-            }
-            val actions = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setGravity(android.view.Gravity.CENTER_VERTICAL)
-                setPadding(dp(10), dp(4), dp(10), dp(4))
-            }
-            actions.addView(actionButton(getString(R.string.action_edit)) { openEditor(index) })
-            if (!isActive) {
-                actions.addView(
-                    actionButton(getString(R.string.action_set_default)) {
-                        Prefs.setActiveEntry(this@MainActivity, index)
-                        renderModelList()
-                        render()
-                        toast(getString(R.string.model_default_pending))
-                    },
-                )
-            } else {
-                actions.addView(
-                    textLabel(getString(R.string.model_entry_default), getColor(R.color.accent), 12f),
-                )
-            }
-            actions.addView(actionButton(getString(R.string.action_delete)) { deleteEntry(index) })
-            group.addView(actions)
-            modelList.addView(
-                group,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { bottomMargin = dp(10) },
-            )
-        }
+        modelListEmpty.visibility = View.GONE
     }
 
-    /** 把某个模型设为该分组的默认模型；不同分组互不影响。 */
+    /**
+     * 把某个模型设为该分组的默认模型；不同分组互不影响。
+     *
+     * 2.16.0：改为轻量热更新 —— 只改 config.toml 顶层的 `default_model` 一行，
+     * 不重建 `[models.*]` 段（那正是 2.15.0 报错的根源），也不重启整个 proot
+     * 环境。网页重新加载一次即可拿到新默认值，聊天记录与登录态都不受影响。
+     */
     private fun switchModelInGroup(index: Int, id: String) {
         val entries = Prefs.load(this).toMutableList()
         val entry = entries.getOrNull(index) ?: return
         if (entry.model.equals(id, ignoreCase = true)) return
         entries[index] = entry.copy(model = id)
         Prefs.save(this, entries)
-        runCatching { ConfigWriter.write(this, entries, Prefs.activeEntry(this)) }
+        val key = ConfigMerger.modelKey(entry.alias, id)
+        val changed = runCatching { ConfigWriter.setDefaultModel(this, key, entry.contextSize) }
             .onFailure { toast("写入配置失败：${it.message}") }
-        RuntimeService.restart(this)
+            .getOrDefault(false)
+        if (workspaceVisible && changed) reloadWorkspace()
         renderModelList()
         render()
-        toast("「$id」已设为分组「${entry.alias}」的默认模型")
+        toast("「$id」已设为分组「${entry.alias}」的默认模型（无需重启）")
     }
 
     /**
@@ -1551,12 +1685,13 @@ class MainActivity : Activity() {
 
     private fun confirmBackup() {
         if (backupBusy) return
-        android.app.AlertDialog.Builder(this)
-            .setTitle(R.string.backup_confirm_title)
-            .setMessage(R.string.backup_confirm_body)
-            .setPositiveButton(android.R.string.ok) { _, _ -> startBackup() }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        // 2.16.2：统一为 Eta 风格 BottomSheet，动效与全 App 一致
+        EtaSheet.confirm(
+            this,
+            getString(R.string.backup_confirm_title),
+            getString(R.string.backup_confirm_body),
+            getString(R.string.action_export_backup),
+        ) { startBackup() }
     }
 
     private fun startBackup() {
@@ -1644,12 +1779,13 @@ class MainActivity : Activity() {
     }
 
     private fun confirmRestore(uri: android.net.Uri) {
-        android.app.AlertDialog.Builder(this)
-            .setTitle(R.string.restore_confirm_title)
-            .setMessage(R.string.restore_confirm_body)
-            .setPositiveButton(android.R.string.ok) { _, _ -> startRestore(uri) }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        // 2.16.2：统一为 Eta 风格 BottomSheet
+        EtaSheet.confirm(
+            this,
+            getString(R.string.restore_confirm_title),
+            getString(R.string.restore_confirm_body),
+            getString(R.string.action_import_backup),
+        ) { startRestore(uri) }
     }
 
     private fun startRestore(uri: android.net.Uri) {
@@ -1825,20 +1961,12 @@ class MainActivity : Activity() {
 
         val ready = Runtime.phase == Runtime.Phase.READY && Runtime.workspaceUrl.isNotEmpty()
         if (ready) ensureCatalogRegistered()
-        val restartSettled = reenterAfterRestart &&
-            Runtime.phase != Runtime.Phase.STARTING &&
-            Runtime.phase != Runtime.Phase.INSTALLING
-        if (restartSettled) {
-            // Consume the flag whether the restart succeeded or failed, so it
-            // cannot fire much later on an unrelated render.
+        // 2.16.1：一律不自动进入工作台。服务/解压就绪后停在启动页，由用户自己
+        // 点「进入工作台」；配置保存后的 restart 也一样，不再自动跳回网页。
+        // restart 标记仍在这里消费掉，避免残留到后续 render。
+        if (reenterAfterRestart && Runtime.phase != Runtime.Phase.STARTING &&
+            Runtime.phase != Runtime.Phase.INSTALLING) {
             reenterAfterRestart = false
-            if (ready && !workspaceVisible && currentPage == R.id.pageSettings) {
-                Runtime.log("配置已生效，自动返回工作台")
-                openWorkspace()
-            }
-        } else if (ready && !workspaceVisible && Prefs.autoEnter(this) && currentPage == R.id.pageHome) {
-            Runtime.log("已开启自动进入，直接打开工作台")
-            openWorkspace()
         }
     }
 
@@ -1852,6 +1980,21 @@ class MainActivity : Activity() {
         confirmRestore(uri)
     }
 
+    /**
+     * 2.17.0：存储权限往往是服务启动后才弹的。授予之后补一次工作区登记，
+     * 让 Agent 立刻能访问 /storage/emulated/0，不用等下一次重启。
+     */
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != 1001) return
+        if (Runtime.phase != Runtime.Phase.READY || Runtime.port == 0) return
+        WorkspaceBootstrap.ensureTrusted(this, Runtime.port)
+    }
+
     override fun onResume() {
         super.onResume()
         cachedLocalIp = null
@@ -1861,6 +2004,13 @@ class MainActivity : Activity() {
         // so without this the user returns from the browser and stays stuck on
         // "waiting" until the next timer tick.
         runCatching { webView.onResume() }
+        // 从「模型供应商」页返回：配置已变化，刷新主界面并让网页重新读一次
+        // 模型清单。切换默认模型只改了一行 config，重载网页即可，无需重启 proot。
+        if (ProviderActivity.changed) {
+            ProviderActivity.changed = false
+            renderModelList()
+            if (workspaceVisible) reloadWorkspace()
+        }
         render()
     }
 
@@ -1872,6 +2022,9 @@ class MainActivity : Activity() {
     override fun onPause() {
         // Snapshot before pausing so a later recreation can restore the page.
         captureWebViewState()
+        // 2.16.1：把 cookie 立刻刷到磁盘，避免进程被杀（覆盖安装、切后台回收）
+        // 时登录态还没落盘而丢失。
+        runCatching { CookieManager.getInstance().flush() }
         runCatching { webView.onPause() }
         super.onPause()
     }
@@ -1883,9 +2036,57 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    /**
+     * 2.16.1：网页里的「更多模型 / 模型下拉」是纯 DOM 浮层或用 replaceState，
+     * 不产生 WebView 历史记录。旧实现里 canGoBack()==false 就直接 hideWorkspace()，
+     * 于是一按返回就跳出工作台（用户反馈的现象）。这里先让网页自己关浮层，
+     * 确认没有浮层之后才退出工作台；有真实历史时仍走 goBack 回到上一级。
+     */
+    private fun handleWorkspaceBack() {
+        if (webView.canGoBack()) {
+            webView.goBack()
+            return
+        }
+        val js = """
+            (function() {
+              var sels = ['[role="dialog"]','[role="menu"]','[role="listbox"]',
+                          '[aria-modal="true"]','[data-state="open"]',
+                          '.modal','.popover','.dropdown-menu',
+                          '[data-radix-popper-content-wrapper]'];
+              for (var i = 0; i < sels.length; i++) {
+                var nodes = document.querySelectorAll(sels[i]);
+                for (var j = 0; j < nodes.length; j++) {
+                  var el = nodes[j];
+                  var r = el.getBoundingClientRect();
+                  var st = window.getComputedStyle(el);
+                  if (r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none') {
+                    var close = el.querySelector('[aria-label="Close"],[aria-label="close"],[aria-label="关闭"],button.close,[data-dismiss]');
+                    if (close) { close.click(); return 'true'; }
+                    var ev = new KeyboardEvent('keydown', {key:'Escape', code:'Escape', keyCode:27, which:27, bubbles:true});
+                    document.dispatchEvent(ev);
+                    window.dispatchEvent(ev);
+                    return 'true';
+                  }
+                }
+              }
+              return 'false';
+            })()
+        """.trimIndent()
+        val exitIfIdle = Runnable {
+            if (webContainer.visibility == View.VISIBLE) hideWorkspace()
+        }
+        val ok = runCatching {
+            webView.evaluateJavascript(js) { value ->
+                val handled = value?.trim()?.trim('"') == "true"
+                if (!handled) exitIfIdle.run()
+            }
+        }.isSuccess
+        if (!ok) exitIfIdle.run()
+    }
+
     override fun onBackPressed() {
         if (webContainer.visibility == View.VISIBLE) {
-            if (webView.canGoBack()) webView.goBack() else hideWorkspace()
+            handleWorkspaceBack()
             return
         }
         if (currentPage != R.id.pageHome) {

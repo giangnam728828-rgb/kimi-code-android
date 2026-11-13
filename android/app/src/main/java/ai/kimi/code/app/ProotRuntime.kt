@@ -21,6 +21,14 @@ object ProotRuntime {
 
     @Volatile private var stopping = false
 
+    /** 当前服务端口与 bearer token，供优雅关闭使用。 */
+    @Volatile private var activePort = 0
+    @Volatile private var activeToken: String? = null
+
+    fun rememberToken(token: String) {
+        activeToken = token
+    }
+
     fun isRunning(): Boolean = process?.isAlive == true
 
     fun start(context: Context, port: Int): Process {
@@ -31,17 +39,23 @@ object ProotRuntime {
         require(File(Paths.rootfs(context), "opt/kimi/entrypoint.sh").isFile) { "rootfs 未安装" }
 
         writeResolvConf(context)
+        CredentialGuard.restoreIfMissing(context)
         ConfigWriter.applyIfConfigured(context)
 
+        // 2.17.0：工作目录默认落到手机共享存储，Agent 读写/构建才作用在用户
+        // 真实文件上；同时把 rootfs 里的挂载点补齐，否则 proot 的 -b 会失败。
+        val workdir = prepareWorkspace(context)
         val host = if (Prefs.lan(context)) "0.0.0.0" else "127.0.0.1"
         val extra = buildList {
             add("KIMI_PORT=$port")
             add("KIMI_HOST=$host")
-            add("KIMI_WORKDIR=${Prefs.workspace(context)}")
+            add("KIMI_WORKDIR=$workdir")
         }
+        ensureGuestDir(context, "/storage/emulated/0")
 
         Runtime.log("启动 proot：端口 $port（监听 $host）")
         stopping = false
+        activePort = port
         val started = runCatching {
             proot(context, listOf("/bin/bash", "/opt/kimi/entrypoint.sh"), extra)
         }.getOrElse { error ->
@@ -58,10 +72,47 @@ object ProotRuntime {
      */
     fun shell(context: Context, script: String, extraEnv: List<String> = emptyList()): Process {
         val env = buildList {
-            add("KIMI_WORKDIR=${Prefs.workspace(context)}")
+            add("KIMI_WORKDIR=${activeWorkdir ?: Prefs.workspace(context)}")
             addAll(extraEnv)
         }
         return proot(context, listOf("/bin/bash", "-lc", script), env)
+    }
+
+    /** 当前真正生效的工作目录（可能是 /root/workspace 兜底）。 */
+    @Volatile private var activeWorkdir: String? = null
+
+    fun currentWorkdir(context: Context): String =
+        activeWorkdir ?: Prefs.workspace(context)
+
+    /**
+     * 2.17.0：准备宿主机工作目录，并在 rootfs 里建好 proot 的 bind 目标。
+     *
+     * `/storage/emulated/0` 由 proot 直接绑进容器，但 guest 侧的目录必须存在，
+     * 否则 bind 会被跳过（表现为 Agent 看不到手机文件）。这里两边都建一次：
+     * 手机侧是用户能看到的真实目录，rootfs 侧只是挂载点。
+     */
+    private fun prepareWorkspace(context: Context): String {
+        val preferred = Prefs.workspace(context)
+        if (preferred.startsWith("/storage/")) {
+            val real = File(preferred)
+            val usable = real.isDirectory || runCatching { real.mkdirs() }.getOrDefault(false)
+            if (usable) {
+                ensureGuestDir(context, preferred)
+                activeWorkdir = preferred
+                return preferred
+            }
+            Runtime.log("无法创建 $preferred（存储权限未授予？），本次回退到 /root/workspace")
+        }
+        ensureGuestDir(context, "/root/workspace")
+        activeWorkdir = "/root/workspace"
+        return "/root/workspace"
+    }
+
+    /** 在 rootfs 内创建目录；proot 的 -b 需要有这个挂载点。 */
+    private fun ensureGuestDir(context: Context, guestPath: String) {
+        runCatching {
+            File(Paths.rootfs(context), guestPath.trimStart('/')).mkdirs()
+        }
     }
 
     private fun proot(context: Context, entry: List<String>, env: List<String>): Process {
@@ -165,35 +216,67 @@ object ProotRuntime {
     fun stop() {
         val current = process ?: return
         stopping = true
-        killTree(descendantPids(pidOf(current)))
-        process = null
-        runCatching { current.destroy() }
+        // 2.17.0：先请服务端自己退出（/api/v1/shutdown），它会把 OAuth 凭据、
+        // 会话文件刷盘；直接 SIGKILL 可能丢掉刚轮换的 refresh token，表现就是
+        // 下次启动「Kimi 账号掉了」。整个过程放后台线程，不阻塞主线程。
         Thread {
-            runCatching { Thread.sleep(600) }
+            shutdownQuietly()
+            val deadline = System.currentTimeMillis() + 900
+            while (current.isAlive && System.currentTimeMillis() < deadline) {
+                runCatching { Thread.sleep(80) }
+            }
+            killTree(descendantPids(pidOf(current)))
+            runCatching { current.destroy() }
+            runCatching { Thread.sleep(300) }
             runCatching { if (current.isAlive) current.destroyForcibly() }
         }.apply { isDaemon = true }.start()
+        process = null
     }
 
     /**
-     * Synchronous variant used before a restart. Runs on a background thread
-     * (see RuntimeService): the old implementation blocked the main thread for
-     * up to 8 seconds, which is exactly the "cannot scroll during restart"
-     * freeze. Children are killed first so the socket is released immediately.
+     * 同步变体，重启前使用。先优雅关闭拿回端口，再强杀整棵进程树。
      */
     fun stopAndWait(timeoutMs: Long) {
         stopping = true
         val current = process
         process = null
         if (current == null) return
-        killTree(descendantPids(pidOf(current)))
-        runCatching { current.destroy() }
+        shutdownQuietly()
         val deadline = System.currentTimeMillis() + timeoutMs
         while (current.isAlive && System.currentTimeMillis() < deadline) {
             runCatching { Thread.sleep(50) }
         }
+        killTree(descendantPids(pidOf(current)))
+        runCatching { current.destroy() }
+        val hardDeadline = System.currentTimeMillis() + 600
+        while (current.isAlive && System.currentTimeMillis() < hardDeadline) {
+            runCatching { Thread.sleep(30) }
+        }
         if (current.isAlive) runCatching { current.destroyForcibly() }
         // Let the kernel reap the children and tear down the listening socket.
         runCatching { Thread.sleep(150) }
+    }
+
+    /** POST /api/v1/shutdown，失败就静默走强杀路径。 */
+    private fun shutdownQuietly() {
+        val port = activePort
+        val token = activeToken ?: return
+        if (port <= 0) return
+        var connection: java.net.HttpURLConnection? = null
+        runCatching {
+            connection = (java.net.URL("http://127.0.0.1:$port/api/v1/shutdown")
+                .openConnection() as java.net.HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 600
+                readTimeout = 600
+                setRequestProperty("Authorization", "Bearer $token")
+                setRequestProperty("Content-Type", "application/json")
+            }
+            connection!!.outputStream.use { it.write("{}".toByteArray()) }
+            connection!!.responseCode
+            connection!!.disconnect()
+        }
     }
 
     fun shouldRestart(): Boolean = !stopping

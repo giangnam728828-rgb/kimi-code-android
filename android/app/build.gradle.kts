@@ -22,9 +22,12 @@ android {
         // switchable without another save/restart.
         // 2.15.0: keep every group in its own providers.<alias> section and
         // allow picking several models for one group at once.
-        // Must stay strictly above 2.14.0 / 27 to overwrite the installed build.
-        versionCode = 28
-        versionName = "2.15.0"
+        // 2.17.0: provider name == group title (alias reconcile), model menu
+        // only lists what the group actually saved, workspace on shared
+        // storage + full-auto tool permission for the agent.
+        // Must stay strictly above the installed build.
+        versionCode = 32
+        versionName = "2.17.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

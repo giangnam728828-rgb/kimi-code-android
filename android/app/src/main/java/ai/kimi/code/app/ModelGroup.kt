@@ -106,11 +106,22 @@ object ModelGroup {
      * 每个分组一个 `[providers.<alias>]` + 该组全部 `[models."<alias>/<id>"]`，
      * 组与组之间留空行；模型 key 一律用**本组** alias 作前缀，杜绝串组。
      */
-    fun renderManaged(groups: List<Group>): String = buildString {
+    fun renderManaged(
+        groups: List<Group>,
+        tuning: Map<String, ModelConfig.ModelTuning> = emptyMap(),
+        providerNames: Map<String, String> = emptyMap(),
+    ): String = buildString {
         groups.forEachIndexed { index, group ->
             if (index > 0) appendLine()
             appendLine("# --- 分组 ${group.title} (${group.alias}) ---")
             appendLine("[providers.${ConfigMerger.quoteKey(group.alias)}]")
+            // 2.16.2：把用户在设定页填的供应商名称写进 config.toml，作为
+            // provider 的可读元数据；分组标题仍由 alias 决定（保持模型 key 稳定，
+            // 不触碰「只增不删」红线）。
+            val pname = providerNames[group.alias].orEmpty()
+            if (pname.isNotBlank()) {
+                appendLine("name = \"${ConfigMerger.escape(pname)}\"")
+            }
             appendLine("type = \"${ConfigMerger.escape(group.type)}\"")
             if (group.baseUrl.isNotBlank()) {
                 appendLine("base_url = \"${ConfigMerger.escape(group.baseUrl)}\"")
@@ -122,11 +133,21 @@ object ModelGroup {
             )
             appendLine()
             group.models.forEach { id ->
+                val key = ConfigMerger.modelKey(group.alias, id)
+                // 逐模型设置覆盖分组默认值；没有单独设置时沿用分组参数，
+                // 保证旧配置与旧单测行为不变。
+                val own = tuning[key]
                 appendLine("[${ConfigMerger.modelSectionKey(group.alias, id)}]")
                 appendLine("provider = \"${ConfigMerger.escape(group.alias)}\"")
                 appendLine("model = \"${ConfigMerger.escape(id)}\"")
-                appendLine("max_context_size = ${group.contextSize.coerceAtLeast(1)}")
-                append(ConfigMerger.effortLines(group.effort))
+                // 2.16.2：网页 toProtocolModel 读 display_name 作为下拉显示名；
+                // 模型「展示名称」改名后，刷新工作台即可生效。
+                val display = own?.displayName.orEmpty()
+                if (display.isNotBlank() && display != id) {
+                    appendLine("display_name = \"${ConfigMerger.escape(display)}\"")
+                }
+                appendLine("max_context_size = ${(own?.contextSize ?: group.contextSize).coerceAtLeast(1)}")
+                append(ConfigMerger.effortLines(own?.effort ?: group.effort))
                 appendLine()
             }
         }

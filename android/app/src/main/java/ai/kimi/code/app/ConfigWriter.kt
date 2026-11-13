@@ -23,6 +23,8 @@ object Prefs {
     const val KEY_ACTIVE_INDEX = "active_index"
     const val KEY_CONFIG_SIGNATURE = "config_signature"
     const val KEY_FIXED_PORT = "fixed_port"
+    const val KEY_AUTONOMY = "autonomy"
+    const val KEY_WORKSPACE_SEEDED = "workspace_seeded"
 
     private const val LEGACY_PROVIDER = "provider"
     private const val LEGACY_BASE_URL = "base_url"
@@ -30,7 +32,18 @@ object Prefs {
     private const val LEGACY_MODEL = "model"
     private const val LEGACY_CONTEXT = "context"
 
-    const val DEFAULT_WORKSPACE = "/root/workspace"
+    /**
+     * 2.17.0：工作目录默认放到手机共享存储。
+     *
+     * 以前默认 `/root/workspace`（容器内部目录），Agent 读写文件、跑构建都只
+     * 发生在 rootfs 里，用户在手机文件管理器里什么都看不到，看起来就像「手机
+     * 上没有文件操作能力」。rootfs 已经把 `/storage/emulated/0` 绑进容器，
+     * 这里把默认目录指到真实手机路径，工具调用才会落到用户的文件上。
+     */
+    const val DEFAULT_WORKSPACE = "/storage/emulated/0/KimiCode"
+
+    /** <= 2.16.2 的默认值，升级时一次性迁走，用户自己改过的不动。 */
+    private const val LEGACY_WORKSPACE = "/root/workspace"
 
     /** Cap the menu length: a gateway can expose hundreds of ids. */
     const val MAX_MODELS_PER_PROVIDER = 40
@@ -220,8 +233,14 @@ object Prefs {
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().putBoolean(key, value).apply()
     }
 
-    fun autoEnter(context: Context): Boolean = flag(context, KEY_AUTO_ENTER, true)
-    fun setAutoEnter(context: Context, enabled: Boolean) = setFlag(context, KEY_AUTO_ENTER, enabled)
+    /**
+     * 2.16.1：用户明确要求「加载完成后不要自动进入工作台，要自己按『进入工作台』」。
+     * 旧版默认 true，且 MainActivity.onResume 会在就绪后自动跳转，这里彻底关闭。
+     * 保留 setter 仅为兼容旧偏好数据；即便用户以前存过 true 也不再生效。
+     * 对应开关已从设置页移除（设置页被供应商页替代）。
+     */
+    fun autoEnter(context: Context): Boolean = false
+    fun setAutoEnter(context: Context, enabled: Boolean) = setFlag(context, KEY_AUTO_ENTER, false)
 
     fun swipeBack(context: Context): Boolean = flag(context, KEY_SWIPE_BACK, true)
     fun setSwipeBack(context: Context, enabled: Boolean) = setFlag(context, KEY_SWIPE_BACK, enabled)
@@ -232,16 +251,37 @@ object Prefs {
     fun keepAwake(context: Context): Boolean = flag(context, KEY_KEEP_AWAKE, true)
     fun setKeepAwake(context: Context, enabled: Boolean) = setFlag(context, KEY_KEEP_AWAKE, enabled)
 
-    fun workspace(context: Context): String =
-        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getString(KEY_WORKSPACE, DEFAULT_WORKSPACE)
-            ?: DEFAULT_WORKSPACE
+    fun workspace(context: Context): String {
+        val sp = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+        val stored = sp.getString(KEY_WORKSPACE, null)
+        // 2.17.0 新装默认用手机目录；老用户只在「还没有任何会话」时迁移，
+        // 否则换工作区会让侧边栏里的历史会话看起来消失了。
+        if (stored == LEGACY_WORKSPACE && !sp.getBoolean(KEY_WORKSPACE_SEEDED, false)) {
+            val sessions = File(File(Paths.rootfs(context), "root/.kimi-code"), "sessions")
+            val hasHistory = sessions.isDirectory && !sessions.list().isNullOrEmpty()
+            sp.edit().putBoolean(KEY_WORKSPACE_SEEDED, true).apply()
+            if (hasHistory) return LEGACY_WORKSPACE
+            sp.edit().putString(KEY_WORKSPACE, DEFAULT_WORKSPACE).apply()
+            return DEFAULT_WORKSPACE
+        }
+        return stored ?: DEFAULT_WORKSPACE
+    }
 
     fun setWorkspace(context: Context, path: String) {
         val normalized = path.trim().ifEmpty { DEFAULT_WORKSPACE }
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit()
             .putString(KEY_WORKSPACE, normalized)
+            .putBoolean(KEY_WORKSPACE_SEEDED, true)
             .apply()
     }
+
+    /**
+     * 2.17.0：全自主执行。开启后 App 会在网页加载前把权限模式设为 `auto`
+     * （Never Ask），工具调用不再逐条等待批准 —— 用户要的「像 DeepSeek
+     * Harness 一样自己动手」。默认开启，可在「工作目录与能力」里关掉。
+     */
+    fun autonomy(context: Context): Boolean = flag(context, KEY_AUTONOMY, true)
+    fun setAutonomy(context: Context, enabled: Boolean) = setFlag(context, KEY_AUTONOMY, enabled)
 
     /** Plugins are managed by the agent itself under `$KIMI_CODE_HOME/plugins`. */
     fun pluginsDir(context: Context): File =
@@ -270,6 +310,9 @@ object ConfigWriter {
 
     /** Called on every proot start. No-op unless the App-owned config changed. */
     fun applyIfConfigured(context: Context): Boolean {
+        // 2.17.0：启动前先把「名字 → 分组别名」对齐，避免用户改了名却因为
+        // 没再进设定页而一直看到旧标题。
+        runCatching { ProviderStore.reconcileAliases(context) }
         val entries = Prefs.load(context).filter { it.isConfigured }
         if (entries.isEmpty()) {
             Runtime.log("尚未配置模型，可在设置页填入 API Key")
@@ -300,11 +343,16 @@ object ConfigWriter {
         val chosen = active?.takeIf { c -> usable.any { it.modelAlias == c.modelAlias } }
             ?: usable.firstOrNull()
         return buildString {
-            // v5: force one rewrite. 2.14.0 merged two model groups into a
-            // single providers.<alias>, so the web menu showed a flat list with
-            // no group separation. Bumping the signature makes this version
-            // regenerate config.toml once, splitting the groups again.
-            append("v5|")
+            // v6: force one rewrite. 2.15.0 dropped historical [models.*]
+            // sections on every save, so switching to a model that the web
+            // dropdown still offered produced
+            // `Model "..." is not configured in config.toml`. Bumping the
+            // signature rebuilds the managed block once and absorbs every
+            // historical section back in, healing already-broken installs.
+            // v7: 2.16.2 把供应商名称与模型展示名称写进 config.toml
+            // （[providers.*].name / [models.*].display_name）。改签名触发一次
+            // 重写并纳入名字，用户在设定页改名保存后工作台刷新即可生效。
+            append("v7|")
             append(chosen?.modelAlias.orEmpty()).append('|')
             usable.sortedBy { it.modelAlias }.forEach {
                 append(it.modelAlias).append('|')
@@ -357,14 +405,36 @@ object ConfigWriter {
         } else {
             problems.forEach { Runtime.log("模型分组校验异常：$it") }
         }
-        val managed = ModelGroup.renderManaged(groups)
-
         val file = configFile(context)
         val existing = readText(file)
-        // Any model previously registered under one of our aliases but no
-        // longer selected must disappear, otherwise the web menu keeps offering
-        // a model that config.toml no longer points at a working provider.
-        val dropPrefixes = ModelGroup.dropPrefixes(groups)
+
+        // 2.16.0 根治：模型段「只增不删」。网页下拉列表是页面加载时读旧
+        // config 渲染的，删掉任何历史段都会让那个仍被展示的 key 变成
+        // `is not configured`。把本次未重新生成的历史段原样并回 managed 块，
+        // 保证网页能选到的每个 model key 都有对应的 [models.*] 段。
+        //
+        // 2.17.0：例外是「App 自己托管的组」。用户在本组里只保存了 2 个模型，
+        // 菜单却列出十几个 —— 那是历史版本自动登记过的整份目录。只要 ProviderStore
+        // 有数据，本组名下的旧段就以 ProviderStore 为准删掉；服务端写入的其它组
+        // （Kimi 订阅等）不受影响。
+        val generatedKeys = groups.flatMap { it.modelKeys() }.toSet()
+        // 2.16.2：改过名的旧 alias 名下的历史段要丢弃，否则会留下指向不存在
+        // provider 的悬空段（网页下拉里点它会报错）。改名本身就是用户主动
+        // 重命名，且保存后会刷新工作台，因此不受「只增不删」保护。
+        val retired = runCatching { ProviderStore.retiredAliases(context) }
+            .getOrDefault(emptySet())
+        // 逐模型参数（上下文 / 思考强度 / 展示名称）来自新的供应商管理页；
+        // 旧配置没有 ProviderStore 数据时为空 map，行为与 2.15.0 一致。
+        val store = runCatching { ProviderStore.load(context) }.getOrDefault(emptyList())
+        val managedAliases = if (store.isEmpty()) emptySet() else groups.map { it.alias }.toSet()
+        val preserved = ModelConfig.preservedSections(existing, generatedKeys, retired, managedAliases)
+        val tuning = runCatching { ProviderStore.tuningFor(store) }.getOrDefault(emptyMap())
+        // 2.16.2：供应商名称 + 模型展示名称写进 config.toml，改名后刷新工作台
+        // 即可生效（网页 toProtocolModel 读 display_name）。
+        val providerNames = runCatching { ProviderStore.namesFor(store) }.getOrDefault(emptyMap())
+        val managed = ModelGroup.renderManaged(groups, tuning, providerNames) +
+            if (preserved.isBlank()) "" else "\n" + preserved
+
         // 顶层 default_model 必须指向一个真实存在的 model key。分组 alias 在
         // 拆开重复项后可能带 -2 后缀，所以不能再用旧 entry 的 modelAlias。
         val chosenIndex = usable.indexOfFirst { it.modelAlias == chosen.modelAlias }.coerceAtLeast(0)
@@ -372,9 +442,12 @@ object ConfigWriter {
         val defaultModel = chosenGroup?.let {
             ConfigMerger.modelKey(it.alias, chosen.model)
         } ?: chosen.modelAlias
-        val merged = ConfigMerger.merge(
-            existing, managed, defaultModel, dropPrefixes = dropPrefixes,
-        )
+        // 不再传 dropPrefixes：删段正是 2.15.0 报错的根源。服务端/用户手写
+        // 到模型段里的能力元数据也随段一起原样保留。
+        val composed = ConfigMerger.merge(existing, managed, defaultModel)
+        // 2.16.1：登录态兜底。签名升级 / 配置重写时，服务端写入的 [auth] 等凭据段
+        // 必须原样保住，否则覆盖安装后会表现为「Kimi 账号掉了」。
+        val merged = ModelConfig.restoreCredentials(existing, composed)
 
         file.parentFile?.mkdirs()
         if (existing == merged) {
@@ -396,6 +469,49 @@ object ConfigWriter {
         )
         return true
     }
+
+    /**
+     * 2.16.0：切换默认模型。只改顶层 `default_model` 一行，不重建任何
+     * `[models.*]` 段、不重启运行环境，因此网页下拉里已有的模型全部保持可选。
+     *
+     * 若目标 key 历史上被 2.15.0 删掉了段（用户当前正遇到的报错状态），这里
+     * 顺手补一个可用段，实现自愈。返回是否真的写入了文件。
+     */
+    fun setDefaultModel(context: Context, modelKey: String, defaultContext: Int = 131072): Boolean {
+        if (modelKey.isBlank()) return false
+        val file = configFile(context)
+        if (!file.isFile) return false
+        val existing = readText(file)
+        var updated = ModelConfig.withDefaultModel(existing, modelKey)
+
+        // 自愈：确保这个 key 有段。补的段放在 managed 块结束标记之前，
+        // 否则下次 stripManagedBlock 会把它当成服务端内容留在块外。
+        val healed = ModelConfig.healMissingSection(existing, modelKey, defaultContext)
+        if (healed.isNotBlank()) {
+            val end = ConfigMerger.MANAGED_END
+            updated = if (updated.contains(end)) {
+                updated.replaceFirst(end, healed.trimEnd('\n') + "\n" + end)
+            } else {
+                updated.trimEnd('\n') + "\n\n" + ConfigMerger.MANAGED_START + "\n" +
+                    healed.trimEnd('\n') + "\n" + end + "\n"
+            }
+            Runtime.log("已自愈补齐模型段：$modelKey")
+        }
+        if (updated == existing) return false
+        file.parentFile?.mkdirs()
+        val tmp = File(file.parentFile, "config.toml.tmp")
+        tmp.writeText(updated)
+        if (!tmp.renameTo(file)) {
+            file.writeText(updated)
+            tmp.delete()
+        }
+        Runtime.log("默认模型已切换为 $modelKey（无需重启）")
+        return true
+    }
+
+    /** 当前 config 里已登记的全部 model key，供界面展示分组用。 */
+    fun registeredKeys(context: Context): Set<String> =
+        ModelConfig.modelKeys(readText(configFile(context)))
 
     private fun readText(file: File): String =
         if (file.isFile) runCatching { file.readText() }.getOrDefault("") else ""

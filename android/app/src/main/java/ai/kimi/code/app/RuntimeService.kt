@@ -146,11 +146,23 @@ class RuntimeService : Service() {
                 if (token == null) {
                     throw IllegalStateException(explainLaunchFailure())
                 }
+                // 停止/重启时要用它调 /api/v1/shutdown 优雅退出，避免强杀
+                // 丢掉还没落盘的登录凭据。
+                ProotRuntime.rememberToken(token)
                 val url = "http://127.0.0.1:$port/#token=$token"
                 Runtime.markReady(port, url)
                 Runtime.log("工作台已就绪：$url")
                 notify("运行中 · 端口 $port")
                 consecutiveFailures = 0
+                // 2.17.0：服务刚起来就把登录凭据留一份备份，并把工作目录登记
+                // 进服务端（否则网页会卡在「Trust project」，消息都发不出去）。
+                Thread({
+                    runCatching {
+                        val count = CredentialGuard.backup(this)
+                        Runtime.log("登录凭据备份：$count 个文件")
+                    }
+                    runCatching { WorkspaceBootstrap.ensureTrusted(this, port) }
+                }, "kimi-bootstrap").apply { isDaemon = true }.start()
 
                 while (!wantStop && epoch == generation && process.isAlive) {
                     Thread.sleep(1500)

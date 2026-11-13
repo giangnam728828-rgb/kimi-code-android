@@ -22,8 +22,11 @@ class ConfigKeysTest {
     }
 
     @Test
-    fun `names are sanitised into short ascii keys`() {
-        assertEquals("deepseek", ConfigMerger.sanitizeAlias("DeepSeek 网关", "custom"))
+    fun `names are sanitised into short keys`() {
+        // 2.16.2：别名保留 Unicode 字母（含中文），因为工作台分组标题就是别名，
+        // 只有 ASCII 会把「深度求索」清成 custom，改名等于没改。
+        assertEquals("deepseek-网关", ConfigMerger.sanitizeAlias("DeepSeek 网关", "custom"))
+        assertEquals("深度求索", ConfigMerger.sanitizeAlias("深度求索", "custom"))
         assertEquals("my-gateway", ConfigMerger.sanitizeAlias("My Gateway", "custom"))
     }
 
