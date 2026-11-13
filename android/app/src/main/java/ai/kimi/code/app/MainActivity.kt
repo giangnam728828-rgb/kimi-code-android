@@ -596,8 +596,8 @@ class MainActivity : Activity() {
         }
         webView.webViewClient = object : WebViewClient() {
             /**
-             * 2.17.0：全自主执行开关打开时，把权限模式注进 `boot.js`
-             * （页面初始化前生效，CSP 允许的同源脚本）。
+             * 把界面增强注进同源的 `boot.js`（页面初始化前生效，CSP 允许）：
+             * 模型选择弹层按供应商分组；「全自主执行」打开时再补上权限模式。
              */
             override fun shouldInterceptRequest(
                 view: WebView?,
@@ -606,11 +606,11 @@ class MainActivity : Activity() {
                 val url = request?.url ?: return null
                 if (url.path?.trimEnd('/')?.endsWith("boot.js") != true) return null
                 if (url.host != "127.0.0.1" && url.host != "localhost") return null
-                if (!Prefs.autonomy(this@MainActivity)) return null
                 val script = runCatching {
-                    WebBootInjector.autonomyScript(
+                    WebBootInjector.pageScript(
                         Runtime.port,
                         ProotRuntime.readToken(this@MainActivity),
+                        Prefs.autonomy(this@MainActivity),
                     )
                 }.getOrNull() ?: return null
                 return WebResourceResponse(
