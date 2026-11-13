@@ -28,7 +28,7 @@ function call(tool, args) {
   return new Promise((resolve) => {
     const cfg = endpoint();
     if (!cfg || !cfg.url) {
-      resolve({ ok: false, error: '手机桥未就绪：App 里「设置 → 能力 → 手机操控」打开一次即可。' });
+      resolve({ ok: false, error: '手机桥未就绪：App 里「设置 → 手机操控」打开一次即可。' });
       return;
     }
     const body = JSON.stringify(args || {});
@@ -164,10 +164,52 @@ const TOOLS = [
       required: ['x1', 'y1', 'x2', 'y2'],
     },
   },
+  {
+    name: 'phone_long_press',
+    description: '在 (x,y) 长按，用于长按菜单、拖动前按住、选中。',
+    inputSchema: {
+      type: 'object',
+      properties: { x: { type: 'integer' }, y: { type: 'integer' } },
+      required: ['x', 'y'],
+    },
+  },
+  {
+    name: 'phone_wait',
+    description:
+      '等界面上出现某段文字再继续，适合等页面加载、等弹窗、等按钮可点。默认最多等 8 秒。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '要等的文字' },
+        timeout_ms: { type: 'integer', description: '超时毫秒，默认 8000，上限 30000' },
+      },
+      required: ['text'],
+    },
+  },
 ];
 
-function reply(id, result) {
-  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
+/**
+ * 等某段文字出现在屏幕上。轮询 phone_screen，比让模型自己反复看屏省 token，
+ * 也不会因为「睡 3 秒再看」这种操作把上下文撑爆。
+ */
+async function waitForText(text, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let last = '';
+  while (Date.now() < deadline) {
+    const res = await call('screen', { limit: 160 });
+    if (res.ok) {
+      last = String(res.result || '');
+      if (last.includes(text)) return { ok: true, result: '已出现「' + text + '」\n\n' + last };
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return {
+    ok: false,
+    error: '等了 ' + Math.round(timeoutMs / 1000) + ' 秒没看到「' + text + '」。\n\n当前界面：\n' + last.slice(0, 800),
+  };
+}
+
+function reply(id, result) {  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
 }
 
 function fail(id, code, message) {
@@ -220,7 +262,10 @@ async function handle(msg) {
       return;
     }
     const args = (params && params.arguments) || {};
-    const res = await call(name.replace(/^phone_/, ''), args);
+    const res =
+      name === 'phone_wait'
+        ? await waitForText(String(args.text || ''), Math.min(Math.max(args.timeout_ms || 8000, 1000), 30000))
+        : await call(name.replace(/^phone_/, ''), args);
     const text = res.ok ? String(res.result || '') : String(res.error || '执行失败');
     reply(id, { content: [{ type: 'text', text }], isError: !res.ok });
     return;

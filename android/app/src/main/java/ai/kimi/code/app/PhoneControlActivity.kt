@@ -12,7 +12,7 @@ import android.widget.ScrollView
 import android.widget.Toast
 
 /**
- * 「设置 → 能力 → 手机操控」。
+ * 「设置 → 手机操控」。
  *
  * 无障碍服务必须由用户在本机系统设置里手动开启（这是 Android 的硬性规定，
  * 任何 App 都绕不过去），所以这一页只做三件事：解释、跳到那个开关、自检。

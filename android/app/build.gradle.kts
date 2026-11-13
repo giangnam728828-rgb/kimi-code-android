@@ -25,9 +25,11 @@ android {
         // 2.17.0: provider name == group title (alias reconcile), model menu
         // only lists what the group actually saved, workspace on shared
         // storage + full-auto tool permission for the agent.
+        // 2.20.0: 撤掉 DSH 原生首页，启动回到网页工作台；手机操控入口
+        // 挪到设置页顶部，MCP 工具补到 13 个。
         // Must stay strictly above the installed build.
-        versionCode = 37
-        versionName = "2.19.1"
+        versionCode = 38
+        versionName = "2.20.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

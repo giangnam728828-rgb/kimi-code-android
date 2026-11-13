@@ -110,7 +110,7 @@ object PhoneBridge {
         val args = runCatching { if (body.isBlank()) JSONObject() else JSONObject(body) }.getOrElse { JSONObject() }
         val service = PhoneAccessibilityService.instance
             ?: return JSONObject().put("ok", false)
-                .put("error", "无障碍服务未开启。请到「设置 → 能力 → 手机操控」按提示开启。")
+                .put("error", "无障碍服务未开启。请到「设置 → 手机操控」按提示开启。")
                 .toString()
 
         return runCatching {

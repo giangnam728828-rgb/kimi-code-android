@@ -25,25 +25,19 @@
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true">
 
-        <!-- 2.19.0：首页换成 DSH 风格的原生壳，工作台退到第二层。 -->
+        <!-- 2.20.0：DSH 风格原生首页整体撤掉，启动直接回到网页工作台。
+             入口仍然是 MainActivity，首页只是引擎就绪前的状态页。 -->
         <activity
-            android:name=".HomeActivity"
+            android:name=".MainActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="true"
-            android:launchMode="singleTop"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <activity
-            android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:exported="true"
-            android:launchMode="singleTask"
-            android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name=".PhoneControlActivity"

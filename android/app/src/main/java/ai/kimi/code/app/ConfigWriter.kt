@@ -234,13 +234,14 @@ object Prefs {
     }
 
     /**
-     * 2.16.1：用户明确要求「加载完成后不要自动进入工作台，要自己按『进入工作台』」。
-     * 旧版默认 true，且 MainActivity.onResume 会在就绪后自动跳转，这里彻底关闭。
-     * 保留 setter 仅为兼容旧偏好数据；即便用户以前存过 true 也不再生效。
-     * 对应开关已从设置页移除（设置页被供应商页替代）。
+     * 2.20.0：恢复成真实开关，默认关。
+     *
+     * 2.16.1 时用户明确说过「不要自动进入工作台」，所以默认值仍然是 false；
+     * 但设置页那个复选框从那时候起就变成了死 UI。原生首页撤掉之后，想要
+     * 「打开就是工作台」的人需要一个能勾的地方，这里就让它重新生效。
      */
-    fun autoEnter(context: Context): Boolean = false
-    fun setAutoEnter(context: Context, enabled: Boolean) = setFlag(context, KEY_AUTO_ENTER, false)
+    fun autoEnter(context: Context): Boolean = flag(context, KEY_AUTO_ENTER, false)
+    fun setAutoEnter(context: Context, enabled: Boolean) = setFlag(context, KEY_AUTO_ENTER, enabled)
 
     fun swipeBack(context: Context): Boolean = flag(context, KEY_SWIPE_BACK, true)
     fun setSwipeBack(context: Context, enabled: Boolean) = setFlag(context, KEY_SWIPE_BACK, enabled)

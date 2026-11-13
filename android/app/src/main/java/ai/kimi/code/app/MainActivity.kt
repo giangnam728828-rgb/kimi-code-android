@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -23,6 +24,7 @@ import android.text.InputType
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
+import android.view.Gravity
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
@@ -102,7 +104,7 @@ class MainActivity : Activity() {
     /** True right after WebView.restoreState: an extra loadUrl would discard the page (and its DOM). */
     private var webViewRestored = false
     private var currentPage = R.id.pageHome
-    /** Set by HomeActivity: open the workspace once the engine is ready. */
+    /** 桌面启动时置位：引擎 READY 后自动打开工作台。 */
     private var pendingOpenWeb = false
     /** Conversation to scroll to after the workspace loads (matched by title). */
     private var pendingSessionTitle: String? = null
@@ -131,7 +133,7 @@ class MainActivity : Activity() {
     private val listener: () -> Unit = { runOnUiThread { render() } }
 
     companion object {
-        /** HomeActivity -> this screen. */
+        /** 启动参数 -> 本页。 */
         const val EXTRA_OPEN_WEB = "open_web"
         const val EXTRA_SESSION_ID = "session_id"
         const val EXTRA_SESSION_TITLE = "session_title"
@@ -159,6 +161,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashGuard.install(this)
         setContentView(R.layout.activity_main)
         bindViews()
         setupWebView()
@@ -169,6 +172,7 @@ class MainActivity : Activity() {
         setupPlugins()
         setupDataPage()
         requestStoragePermission()
+        installPhoneEntry()
 
         Runtime.addListener(listener)
         render()
@@ -177,9 +181,10 @@ class MainActivity : Activity() {
             RuntimeService.start(this)
         }
 
+        val targetPage = intent.getIntExtra(EXTRA_PAGE, 0)
         pendingOpenWeb = intent.getBooleanExtra(EXTRA_OPEN_WEB, false)
         pendingSessionTitle = intent.getStringExtra(EXTRA_SESSION_TITLE)
-        when (intent.getIntExtra(EXTRA_PAGE, 0)) {
+        when (targetPage) {
             PAGE_DATA -> switchPage(R.id.pageData)
             PAGE_TERMINAL -> switchPage(R.id.pageTerminal)
             PAGE_PLUGINS -> switchPage(R.id.pagePlugins)
@@ -716,9 +721,8 @@ class MainActivity : Activity() {
                 if (Runtime.phase == Runtime.Phase.READY && Runtime.port > 0) {
                     WorkspaceBootstrap.ensureTrusted(this@MainActivity, Runtime.port)
                 }
-                // HomeActivity tapped a conversation: the web app keeps its
-                // session list in memory (no URL route), so the only reliable
-                // way in is to open its own sheet and tap the matching row.
+                // 从外部指定了会话：网页工作台没有 URL 深链，会话列表只存在
+                // 内存里，唯一可靠的办法是打开它自己的会话面板再按标题点。
                 val wanted = pendingSessionTitle
                 if (wanted != null && !url.isNullOrBlank() && url.startsWith("http")) {
                     pendingSessionTitle = null
@@ -2237,10 +2241,15 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- render
 
     private fun render() {
-        if (pendingOpenWeb && Runtime.phase == Runtime.Phase.READY) {
-            pendingOpenWeb = false
-            openWorkspace()
+        // 2.20.0：设置里的「自动进入工作台」恢复生效（默认关）。用户在 2.16.1
+        // 明确说过不要自动跳，所以这里只认他自己勾的那一下。
+        if (pendingOpenWeb || Prefs.autoEnter(this)) {
+            if (Runtime.phase == Runtime.Phase.READY) {
+                if (pendingOpenWeb) pendingOpenWeb = false
+                if (!workspaceVisible) openWorkspace()
+            }
         }
+        ensurePhoneMcp()
         statusTitle.text = Runtime.title
         statusDetail.text = Runtime.detail.ifBlank {
             if (Runtime.phase == Runtime.Phase.IDLE) getString(R.string.status_idle_detail) else ""
@@ -2385,6 +2394,7 @@ class MainActivity : Activity() {
             renderModelList()
             if (workspaceVisible) reloadWorkspace()
         }
+        refreshPhoneEntry()
         render()
     }
 
@@ -2514,6 +2524,88 @@ class MainActivity : Activity() {
             setTextColor(color)
             textSize = sizeSp
         }
+
+    // ---------------------------------------------------------------- 手机操控
+
+    private var phoneEntryStatus: TextView? = null
+    private var phoneMcpReady = false
+
+    /**
+     * 2.20.0：原生首页撤掉后，手机操控的入口放在设置页最上面。
+     *
+     * 这是全 App 唯一需要用户手动做一次的事（系统无障碍授权），所以状态
+     * 必须一直看得见：没开是灰字，开了是绿字。点进去是说明 + 授权按钮 +
+     * 工具自检，不需要回首页。
+     */
+    private fun installPhoneEntry() {
+        val host = findViewById<LinearLayout>(R.id.settingsRoot) ?: return
+        if (phoneEntryStatus != null) return
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = getDrawable(R.drawable.bg_card)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { openPhoneControl() }
+        }
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        head.addView(TextView(this).apply {
+            text = "手机操控"
+            textSize = 15f
+            setTextColor(getColor(R.color.text_primary))
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val status = TextView(this).apply {
+            textSize = 12.5f
+            setTextColor(getColor(R.color.text_secondary))
+        }
+        head.addView(status)
+        card.addView(head)
+        card.addView(TextView(this).apply {
+            text = "让对话里的 AI 自己读屏、点按、输入、滑动、打开应用"
+            textSize = 12f
+            setTextColor(getColor(R.color.text_secondary))
+            setPadding(0, dp(4), 0, 0)
+        })
+        phoneEntryStatus = status
+        host.addView(card, 0, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+        refreshPhoneEntry()
+    }
+
+    private fun refreshPhoneEntry() {
+        val status = phoneEntryStatus ?: return
+        val on = PhoneAccess.isEnabled(this)
+        status.text = if (on) "已开启" else "未开启 · 点这里"
+        status.setTextColor(getColor(if (on) R.color.ok else R.color.text_secondary))
+    }
+
+    private fun openPhoneControl() {
+        startActivity(Intent(this, PhoneControlActivity::class.java))
+    }
+
+    /**
+     * 引擎每次就绪后，把 phone-mcp 脚本和 mcp.json 写进容器一次。
+     *
+     * 2.20.0 之前这段逻辑挂在首页的 onCreate 里，首页删掉后必须搬过来，
+     * 否则模型那边根本没有 phone_* 工具——看起来像「手机操控没做」。
+     * 不依赖无障碍是否已开：先装好，用户随时去授权，不用重启引擎。
+     */
+    private fun ensurePhoneMcp() {
+        if (Runtime.phase != Runtime.Phase.READY) {
+            phoneMcpReady = false
+            return
+        }
+        if (phoneMcpReady) return
+        phoneMcpReady = true
+        val app = applicationContext
+        Thread {
+            runCatching { PhoneAccess.installIntoContainer(app) }
+        }.apply { isDaemon = true }.start()
+    }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
