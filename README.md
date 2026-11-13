@@ -186,3 +186,38 @@ gradle :app:testReleaseUnitTest -Dkimi.rootfs=/path/to/rootfs-arm64.tar.gz
 - **模型展示名**写进 `[models.*]` 的 `display_name`，下拉里的模型名也会跟着变。
 - 旧的设置页列表逻辑已停用，不再往进不去的页面里重建 View。
 - versionCode 31；全量 111 个单测通过（新增 `ModelRenameTest`）。
+
+---
+
+## 2.17.0 更新（分组名真正跟随供应商名、模型菜单收敛、手机存储与全自主执行）
+
+- **分组名终于等于你起的名字**：2.16.2 只在「名字发生变化」时迁移 alias，
+  如果你先改过名、后升级，`name` 早就是「讯飞」而 alias 仍是 `custom-2`，
+  再点保存也检测不到变化。2.17.0 改成每次保存 / 每次启动都做一次幂等对齐：
+  alias 永远等于 `sanitize(名称)`，冲突自动加 `-2`；旧 alias 进退役表，历史
+  `[models.*]` 段一并清掉。工作台「更多模型」的标签页因此从 `custom-2`
+  变成 `讯飞`。
+- **「更多模型」只列本组真正保存的模型**：只要 ProviderStore 里有这个分组，
+  本组名下未被重新生成的 `[models.*]` 段就会被删掉（历史版本自动登记过的整份
+  目录不再残留）；服务端自己写的组（例如 Kimi 订阅）不受影响。保存后会重启并
+  刷新工作台，菜单立刻收敛到你勾选的那几个。
+- **登录态三重兜底**：① 停服务改成先调 `/api/v1/shutdown` 让服务端把 OAuth
+  凭据 / 会话刷盘，再回收进程，避免强杀丢掉刚轮换的 refresh token；② 每次就绪
+  后把 `~/.kimi-code/credentials/*.json` 备份到 App 私有目录，启动时发现凭据
+  文件消失（且 config 仍引用 oauth）就原样恢复；③ 工作目录设置页新增「认领自检」，
+  直接显示凭据文件数量与 config 内 oauth 引用数，方便定位。
+- **Agent 真正能操作手机文件**：工作目录默认改成 `/storage/emulated/0/KimiCode`
+  （新装）；老用户保留原工作区以免历史会话"消失"，但 App 会自动把
+  `/storage/emulated/0` 加进该工作区的 `additional_dirs`，工具照样能读写手机
+  文件。proot 启动前会在 rootfs 里补建 bind 挂载点，避免 `/storage` 绑定失败。
+- **默认全自主执行（Never Ask）**：设置页新增「全自主执行」开关（默认开）。
+  开启时 App 在 WebView 请求 `boot.js` 时注入
+  `localStorage['kimi-web.permission']='auto'`（页面初始化前生效，不改 rootfs），
+  读文件 / 写文件 / 跑命令不再逐条等批准；关闭即恢复手动批准。
+- **工作区预信任**：服务就绪后自动把当前工作区登记为 trusted，避免手机上调不出
+  「Trust project」而卡在发不出消息的状态。
+- **开发环境自检 / 一键安装**：工作目录弹层里可以检查容器内的 Node / npm / Git /
+  Python / make，并可一键 `apt-get install git python3 make`，输出实时滚动。
+  rootfs 自带 Node 22 + npm，Node 项目可直接 `npm install && npm run build`。
+- versionCode 32；全量 114 个单测通过。真机仍需验证：改名后工作台标签、只列本组
+  模型、滑掉后台再登录、Agent 写手机文件与跑构建。
