@@ -282,4 +282,8 @@
     <string name="provider_restored_auto">已恢复自动推断</string>
     <string name="provider_btn_cancel">取消</string>
     <string name="provider_btn_save">储存</string>
+
+    <string name="phone_access_label">Kimi Code 手机操控</string>
+    <string name="phone_access_summary">让 Kimi 读取当前屏幕并点按、输入</string>
+    <string name="phone_access_description">开启后，Kimi Code 里的模型可以读取当前屏幕上的文字与控件，并按你的指令点按、输入、滚动、返回桌面或打开其他 App。只在任务需要时读取，随时可以在这里关掉。</string>
 </resources>

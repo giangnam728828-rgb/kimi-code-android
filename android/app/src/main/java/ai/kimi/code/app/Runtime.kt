@@ -29,6 +29,8 @@ object Runtime {
     @Volatile var progress: Int = -1
     @Volatile var port: Int = 0
     @Volatile var workspaceUrl: String = ""
+    /** Wall clock of the last READY, for the run page's uptime. */
+    @Volatile var readyAt: Long = 0L
     /**
      * Bumped on every log line. The UI uses it to skip rebuilding the whole
      * log TextView when nothing actually changed (see MainActivity.render).
@@ -71,6 +73,7 @@ object Runtime {
     }
 
     fun markReady(port: Int, url: String) {
+        readyAt = System.currentTimeMillis()
         this.port = port
         this.workspaceUrl = url
         update(Phase.READY, "运行中", "工作台已就绪（端口 $port）")

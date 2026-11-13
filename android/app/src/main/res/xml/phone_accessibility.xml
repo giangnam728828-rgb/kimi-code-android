@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  手机操控的无障碍配置。
+
+  只需要窗口变化事件（用来知道界面换没换），不订阅文本变化：模型每次调用
+  phone_screen 时主动读一次，比持续推送省电，也不会把用户的一举一动都记下来。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowsChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
+    android:description="@string/phone_access_description"
+    android:notificationTimeout="120"
+    android:summary="@string/phone_access_summary" />

@@ -102,6 +102,10 @@ class MainActivity : Activity() {
     /** True right after WebView.restoreState: an extra loadUrl would discard the page (and its DOM). */
     private var webViewRestored = false
     private var currentPage = R.id.pageHome
+    /** Set by HomeActivity: open the workspace once the engine is ready. */
+    private var pendingOpenWeb = false
+    /** Conversation to scroll to after the workspace loads (matched by title). */
+    private var pendingSessionTitle: String? = null
     private var lastExternalUrl: String? = null
     private var lastExternalAt = 0L
 
@@ -126,8 +130,17 @@ class MainActivity : Activity() {
 
     private val listener: () -> Unit = { runOnUiThread { render() } }
 
-    private companion object {
-        const val REQUEST_PICK_BACKUP = 3001
+    companion object {
+        /** HomeActivity -> this screen. */
+        const val EXTRA_OPEN_WEB = "open_web"
+        const val EXTRA_SESSION_ID = "session_id"
+        const val EXTRA_SESSION_TITLE = "session_title"
+        const val EXTRA_PAGE = "page"
+        const val PAGE_DATA = 1
+        const val PAGE_TERMINAL = 2
+        const val PAGE_PLUGINS = 3
+
+        private const val REQUEST_PICK_BACKUP = 3001
         const val REQUEST_FILE_CHOOSER = 3002
         const val REQUEST_CAPTURE_IMAGE = 3003
         const val REQUEST_CAMERA_PERMISSION = 1002
@@ -162,6 +175,14 @@ class MainActivity : Activity() {
 
         if (Paths.isRuntimeInstalled(this) && !ProotRuntime.isRunning() && Runtime.phase == Runtime.Phase.IDLE) {
             RuntimeService.start(this)
+        }
+
+        pendingOpenWeb = intent.getBooleanExtra(EXTRA_OPEN_WEB, false)
+        pendingSessionTitle = intent.getStringExtra(EXTRA_SESSION_TITLE)
+        when (intent.getIntExtra(EXTRA_PAGE, 0)) {
+            PAGE_DATA -> switchPage(R.id.pageData)
+            PAGE_TERMINAL -> switchPage(R.id.pageTerminal)
+            PAGE_PLUGINS -> switchPage(R.id.pagePlugins)
         }
     }
 
@@ -695,6 +716,14 @@ class MainActivity : Activity() {
                 if (Runtime.phase == Runtime.Phase.READY && Runtime.port > 0) {
                     WorkspaceBootstrap.ensureTrusted(this@MainActivity, Runtime.port)
                 }
+                // HomeActivity tapped a conversation: the web app keeps its
+                // session list in memory (no URL route), so the only reliable
+                // way in is to open its own sheet and tap the matching row.
+                val wanted = pendingSessionTitle
+                if (wanted != null && !url.isNullOrBlank() && url.startsWith("http")) {
+                    pendingSessionTitle = null
+                    view?.postDelayed({ locateSession(wanted) }, 900)
+                }
             }
 
             override fun onReceivedError(
@@ -972,6 +1001,37 @@ class MainActivity : Activity() {
         shell.visibility = View.GONE
         webContainer.visibility = View.VISIBLE
         applyImmersive(true)
+    }
+
+    /**
+     * Opens the web app's conversation sheet and taps the row whose title is
+     * [title]. Best effort: if the list has not rendered or the title is not
+     * there (another workspace), the user simply lands on the workbench and
+     * picks it themselves — nothing is lost.
+     */
+    private fun locateSession(title: String) {
+        val payload = org.json.JSONObject.quote(title)
+        val js = """
+            (function(){
+              var want = $payload;
+              function tap(el){
+                if (!el) return false;
+                try { el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window})); return true; }
+                catch (e) { try { el.click(); return true; } catch (e2) { return false; } }
+              }
+              setTimeout(function(){ tap(document.querySelector('.topbar .tb-main')); }, 250);
+              setTimeout(function(){
+                var nodes = [].slice.call(document.querySelectorAll('button, [role=button], li, div, span'));
+                var hit = nodes.filter(function(e){
+                  if (!e.offsetParent) return false;
+                  var s = (e.innerText || '').trim();
+                  return s === want;
+                });
+                if (hit.length) tap(hit[hit.length - 1]);
+              }, 1100);
+            })();
+        """.trimIndent()
+        runCatching { webView.evaluateJavascript(js, null) }
     }
 
     private fun reloadWorkspace() {
@@ -2177,6 +2237,10 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- render
 
     private fun render() {
+        if (pendingOpenWeb && Runtime.phase == Runtime.Phase.READY) {
+            pendingOpenWeb = false
+            openWorkspace()
+        }
         statusTitle.text = Runtime.title
         statusDetail.text = Runtime.detail.ifBlank {
             if (Runtime.phase == Runtime.Phase.IDLE) getString(R.string.status_idle_detail) else ""
